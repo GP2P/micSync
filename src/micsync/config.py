@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping
 
@@ -62,4 +63,32 @@ def build_config(nexus_data_root: Path, env: Mapping[str, str]) -> Config:
         ),
         notify=_coerce_bool(env.get("MICSYNC_NOTIFY"), True),
         eject=_coerce_bool(env.get("MICSYNC_EJECT"), True),
+    )
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def apply_runtime_overrides(
+    config: Config,
+    *,
+    max_file_size_mb: int | None,
+    notify: bool | None,
+    eject: bool | None,
+) -> Config:
+    return replace(
+        config,
+        max_file_size_mb=config.max_file_size_mb if max_file_size_mb is None else max_file_size_mb,
+        notify=config.notify if notify is None else notify,
+        eject=config.eject if eject is None else eject,
     )

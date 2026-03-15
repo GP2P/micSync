@@ -84,6 +84,7 @@ def import_recording(
     catalog: Catalog,
     log_path: Path,
     run_id: str,
+    audio_subdir: str | None = None,
 ) -> ImportOutcome:
     parsed: ParsedRecordingName = parse_recording_name(source_path.name)
     recording_start_at = parsed.start_at.isoformat(timespec="seconds")
@@ -102,6 +103,8 @@ def import_recording(
     tmp_path = tmp_root / f"{parsed.recording_group_key}{source_path.suffix}.tmp"
     checksum, size_bytes = _copy_with_checksum(source_path, tmp_path)
     relative_dir = _recordings_relative_dir(parsed.start_at)
+    if audio_subdir:
+        relative_dir = Path("audio") / audio_subdir / relative_dir.relative_to("audio")
     final_path = plan_destination_path(
         recordings_root=recordings_root,
         relative_dir=relative_dir,
@@ -120,6 +123,7 @@ def import_recording(
 
     catalog.insert_recording_file(
         recording_id=recording_id,
+        recording_group_key=parsed.recording_group_key,
         run_id=run_id,
         source_volume_label=volume_label,
         source_mount_path=str(source_mount_path),

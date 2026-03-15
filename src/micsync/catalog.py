@@ -35,6 +35,7 @@ class Catalog:
                 create table if not exists recording_files (
                     id integer primary key,
                     recording_id integer not null references recordings(id),
+                    recording_group_key text,
                     run_id text,
                     source_volume_label text,
                     source_volume_identifier text,
@@ -121,3 +122,13 @@ class Catalog:
                 values,
             )
             return int(cursor.lastrowid)
+
+    def fetch_recording_file(self, file_id: int) -> sqlite3.Row:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from recording_files where id = ?",
+                (file_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(file_id)
+            return row

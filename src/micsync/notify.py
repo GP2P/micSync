@@ -21,9 +21,12 @@ def build_start_message(
     *,
     candidate_count: int,
     total_bytes: int,
+    existing_count: int = 0,
     stop_hint: str | None = None,
 ) -> str:
     message = f"{candidate_count} candidate files, {_format_bytes(total_bytes)} queued"
+    if existing_count:
+        message = f"{message} | {existing_count} already exist"
     if stop_hint:
         return f"{message} | stop: {stop_hint}"
     return message

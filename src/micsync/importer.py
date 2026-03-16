@@ -157,6 +157,32 @@ def _metadata_matches_existing_duplicate(*, source_path: Path, existing_path: Pa
     )
 
 
+def find_preexisting_raw_duplicate(
+    *,
+    source_path: Path,
+    source_parent_folder: str,
+    volume_label: str | None,
+    recordings_root: Path,
+) -> Path | None:
+    physical_mic_id = parse_physical_mic_id(volume_label)
+    source_dir_name = _raw_source_dir_name(volume_label, physical_mic_id)
+    canonical_raw_path = (
+        recordings_root
+        / "raw"
+        / source_dir_name
+        / source_parent_folder
+        / source_path.name
+    )
+    if not canonical_raw_path.exists():
+        return None
+    if _metadata_matches_existing_duplicate(
+        source_path=source_path,
+        existing_path=canonical_raw_path,
+    ):
+        return canonical_raw_path
+    return None
+
+
 def mirror_recording_to_raw(
     *,
     source_path: Path,
@@ -190,11 +216,13 @@ def mirror_recording_to_raw(
     canonical_source_key = str(canonical_raw_path.relative_to(recordings_root))
 
     status = "mirrored"
-    if canonical_raw_path.exists():
-        if _metadata_matches_existing_duplicate(
-            source_path=source_path,
-            existing_path=canonical_raw_path,
-        ):
+    preexisting_duplicate = find_preexisting_raw_duplicate(
+        source_path=source_path,
+        source_parent_folder=source_parent_folder,
+        volume_label=volume_label,
+        recordings_root=recordings_root,
+    )
+    if preexisting_duplicate is not None:
             existing_row = catalog.fetch_source_file_by_key(canonical_source_key)
             checksum = (
                 str(existing_row["source_checksum"])
@@ -203,15 +231,15 @@ def mirror_recording_to_raw(
             )
             size_bytes = int(source_path.stat().st_size)
             raw_path = canonical_raw_path
-        else:
-            checksum, size_bytes = _measure_file_with_checksum(source_path)
-            raw_path = plan_destination_path(
-                recordings_root=recordings_root,
-                relative_dir=raw_relative_dir,
-                dest_name=source_path.name,
-                incoming_checksum=checksum,
-                existing_checksum_lookup=compute_file_checksum,
-            )
+    elif canonical_raw_path.exists():
+        checksum, size_bytes = _measure_file_with_checksum(source_path)
+        raw_path = plan_destination_path(
+            recordings_root=recordings_root,
+            relative_dir=raw_relative_dir,
+            dest_name=source_path.name,
+            incoming_checksum=checksum,
+            existing_checksum_lookup=compute_file_checksum,
+        )
     else:
         checksum, size_bytes = _copy_with_checksum(source_path, tmp_path)
         raw_path = canonical_raw_path

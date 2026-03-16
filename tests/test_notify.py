@@ -17,9 +17,11 @@ class NotifyTest(unittest.TestCase):
         message = build_start_message(
             candidate_count=3,
             total_bytes=1024,
+            existing_count=2,
             stop_hint="copied exact stop command to clipboard",
         )
         self.assertIn("3 candidate files", message)
+        self.assertIn("2 already exist", message)
         self.assertIn("stop:", message)
 
     def test_completion_message_includes_counts_and_elapsed_time(self) -> None:

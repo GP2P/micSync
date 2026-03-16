@@ -21,6 +21,7 @@ The current design assumes:
 - Groups adjacent 30-minute segments into the same `take` when timing is continuous enough
 - Handles duplicate Shortcut triggers and frozen processes with a singleton lock and rescan marker
 - Supports resumable runs and duplicate detection
+- Prefilters exact duplicates before mirroring so queued-byte estimates and per-file mirror progress reflect only new copies
 - Detects supported macOS/Linux/Windows trash paths and marks those recordings hidden in the catalog
 - Sends macOS notifications
 - Can auto-eject source volumes after a clean verified mirror stage

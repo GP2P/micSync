@@ -581,7 +581,7 @@ class CliRunTest(unittest.TestCase):
                 result = run_import(args)
 
         self.assertEqual(result, 0)
-        self.assertIn("micSync mirror starting candidates=2 total=400MB", stdout.getvalue())
+        self.assertIn("micSync mirror starting candidates=2 existing=0 total=400MB", stdout.getvalue())
         self.assertIn(
             "| mirror    |  1/2 |  0.2/ 0.4 GB, 58% | 233.00MB | raw/MIC_01/A/TX01_MIC001_20260315_120000.wav",
             stdout.getvalue(),
@@ -701,6 +701,122 @@ class CliRunTest(unittest.TestCase):
             "| normalize |  1/1 |  0.2/ 0.2 GB, 100% | 233.00MB | derived/normalized/2026/03/15/20260315_120000_TX01_MIC001.wav",
             stdout.getvalue(),
         )
+
+    def test_run_import_prefilters_existing_duplicates_before_notification_and_mirror_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            recordings_root = tmp_path / "recordings"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=False,
+                derived_outputs_strategy="clone_then_copy",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=True,
+                eject=False,
+            )
+            duplicate_candidate = CandidateFile(
+                volume_label="MIC 1",
+                volume_root=tmp_path / "Volumes" / "MIC 1",
+                source_path=tmp_path / "Volumes" / "MIC 1" / "A" / "TX01_MIC001_20260315_120000.wav",
+                source_parent_folder="A",
+                file_size_bytes=233_000_000,
+            )
+            new_candidate = CandidateFile(
+                volume_label="MIC 1",
+                volume_root=tmp_path / "Volumes" / "MIC 1",
+                source_path=tmp_path / "Volumes" / "MIC 1" / "A" / "TX01_MIC001_20260315_123000.wav",
+                source_parent_folder="A",
+                file_size_bytes=167_000_000,
+            )
+            new_outcome = MirrorOutcome(
+                raw_path=recordings_root / "raw" / "MIC_01" / "A" / new_candidate.source_path.name,
+                checksum="new",
+                size_bytes=167_000_000,
+                status="mirrored",
+                source_file_id=2,
+                warning_count=0,
+            )
+
+            class FakeLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return False
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            args = argparse.Namespace(
+                max_file_size_mb=None,
+                derived=None,
+                notify=None,
+                eject=None,
+                source_volume=None,
+                stop=False,
+                run_detached_child=False,
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=FakeLock()),
+                mock.patch(
+                    "micsync.cli.scan_candidates",
+                    return_value=[duplicate_candidate, new_candidate],
+                ),
+                mock.patch(
+                    "micsync.cli.find_preexisting_raw_duplicate",
+                    side_effect=[
+                        recordings_root / "raw" / "MIC_01" / "A" / duplicate_candidate.source_path.name,
+                        None,
+                    ],
+                ),
+                mock.patch("micsync.cli._pending_derivation_queue", return_value=[]),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+                mock.patch("micsync.cli.copy_to_clipboard", return_value=False),
+                mock.patch("micsync.cli.send_notification") as send_notification,
+                mock.patch("micsync.cli.mirror_recording_to_raw", return_value=new_outcome) as mirror_recording_to_raw,
+                redirect_stdout(stdout),
+            ):
+                result = run_import(args)
+
+        self.assertEqual(result, 0)
+        self.assertIn("micSync mirror starting candidates=1 existing=1 total=167MB", stdout.getvalue())
+        self.assertIn(
+            "| mirror    |  1/1 |  0.2/ 0.2 GB, 100% | 167.00MB | raw/MIC_01/A/TX01_MIC001_20260315_123000.wav",
+            stdout.getvalue(),
+        )
+        self.assertNotIn("TX01_MIC001_20260315_120000.wav", stdout.getvalue())
+        mirror_recording_to_raw.assert_called_once()
+        start_notification = next(
+            kwargs
+            for _, kwargs in send_notification.call_args_list
+            if kwargs.get("title") == "micSync mirror starting"
+        )
+        self.assertIn("1 already exist", start_notification["message"])
 
     def test_attached_run_echoes_importer_log_events_to_stdout_and_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

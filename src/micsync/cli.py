@@ -14,7 +14,11 @@ import uuid
 from micsync.catalog import Catalog
 from micsync.config import apply_runtime_overrides, build_config, load_env_file
 from micsync.eject import eject_volume
-from micsync.importer import derive_mirrored_recording, mirror_recording_to_raw
+from micsync.importer import (
+    derive_mirrored_recording,
+    find_preexisting_raw_duplicate,
+    mirror_recording_to_raw,
+)
 from micsync.lock import LockManager
 from micsync.logging_utils import (
     build_event_line,
@@ -348,34 +352,53 @@ def run_import(args: argparse.Namespace) -> int:
                     candidate.source_path.name,
                 )
             )
+            preexisting_duplicates = []
+            mirror_candidates = []
+            for candidate in pending_candidates:
+                duplicate_raw_path = find_preexisting_raw_duplicate(
+                    source_path=candidate.source_path,
+                    source_parent_folder=candidate.source_parent_folder,
+                    volume_label=candidate.volume_label,
+                    recordings_root=config.recordings_root,
+                )
+                if duplicate_raw_path is not None:
+                    preexisting_duplicates.append((candidate, duplicate_raw_path))
+                else:
+                    mirror_candidates.append(candidate)
+            pending_candidates = mirror_candidates
+            summary.duplicate_count += len(preexisting_duplicates)
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
-            if pending_candidates:
+            if pending_candidates or preexisting_duplicates:
                 log_event(
                     build_event_line(
                         "micSync mirror starting "
                         f"candidates={len(pending_candidates)} "
+                        f"existing={len(preexisting_duplicates)} "
                         f"total={pending_bytes / 1_000_000:.0f}MB",
                         kind="event",
                     )
                 )
             else:
                 log_event(build_event_line("micSync no candidates detected", kind="event"))
-            if config.notify and pending_candidates:
-                stop_hint = (
-                    "copied exact stop command to clipboard"
-                    if copy_to_clipboard(stop_command)
-                    else stop_command
-                )
+            if config.notify and (pending_candidates or preexisting_duplicates):
+                stop_hint = None
+                if pending_candidates:
+                    stop_hint = (
+                        "copied exact stop command to clipboard"
+                        if copy_to_clipboard(stop_command)
+                        else stop_command
+                    )
                 send_notification(
                     title="micSync mirror starting",
                     message=build_start_message(
                         candidate_count=len(pending_candidates),
                         total_bytes=pending_bytes,
+                        existing_count=len(preexisting_duplicates),
                         stop_hint=stop_hint,
                     ),
                 )
 
-            any_processed = False
+            any_processed = bool(preexisting_duplicates)
             mirrored_outcomes = []
             processed_mirror_bytes = 0
             for mirror_index, candidate in enumerate(pending_candidates, start=1):

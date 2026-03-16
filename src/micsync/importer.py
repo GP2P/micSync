@@ -20,6 +20,7 @@ class ImportOutcome:
     size_bytes: int
     status: str
     recording_id: int
+    file_id: int
 
 
 def compute_file_checksum(path: Path) -> str:
@@ -102,6 +103,7 @@ def import_recording(
 
     tmp_path = tmp_root / f"{parsed.recording_group_key}{source_path.suffix}.tmp"
     checksum, size_bytes = _copy_with_checksum(source_path, tmp_path)
+    attempted_at = datetime.now().isoformat(timespec="seconds")
     relative_dir = _recordings_relative_dir(parsed.start_at)
     if audio_subdir:
         relative_dir = Path("audio") / audio_subdir / relative_dir.relative_to("audio")
@@ -121,11 +123,12 @@ def import_recording(
         final_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path.replace(final_path)
 
-    catalog.insert_recording_file(
+    file_id = catalog.insert_recording_file(
         recording_id=recording_id,
         recording_group_key=parsed.recording_group_key,
         run_id=run_id,
         source_volume_label=volume_label,
+        source_volume_identifier=volume_label,
         source_mount_path=str(source_mount_path),
         source_parent_folder=source_parent_folder,
         source_filename=source_path.name,
@@ -143,6 +146,9 @@ def import_recording(
         dest_relative_path=str(final_path.relative_to(recordings_root)),
         dest_size_bytes=size_bytes,
         import_status=status,
+        first_seen_at=attempted_at,
+        last_attempted_at=attempted_at,
+        completed_at=attempted_at,
     )
     append_run_log(log_path, f"{status} {source_path.name} -> {final_path}")
     return ImportOutcome(
@@ -151,4 +157,5 @@ def import_recording(
         size_bytes=size_bytes,
         status=status,
         recording_id=recording_id,
+        file_id=file_id,
     )

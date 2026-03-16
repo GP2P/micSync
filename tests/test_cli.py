@@ -6,7 +6,6 @@ from pathlib import Path
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
-DEPLOY_ROOT = SERVICE_ROOT.parents[1]
 
 
 class CliSmokeTest(unittest.TestCase):
@@ -23,13 +22,13 @@ class CliSmokeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("usage", result.stdout.lower())
 
-    def test_wrapper_prefers_explicit_environment_roots(self) -> None:
+    def test_standalone_wrapper_prefers_explicit_environment_roots(self) -> None:
         env = os.environ.copy()
-        env["NEXUS_DEPLOY_ROOT"] = str(DEPLOY_ROOT)
+        env["NEXUS_DEPLOY_ROOT"] = "/tmp/micsync-deploy-root"
         env["NEXUS_DATA_ROOT"] = "/tmp/micsync-test-data"
         result = subprocess.run(
-            [str(DEPLOY_ROOT / "scripts" / "micsync-import.sh"), "--help"],
-            cwd=DEPLOY_ROOT.parents[1],
+            [str(SERVICE_ROOT / "scripts" / "micsync.sh"), "--help"],
+            cwd=SERVICE_ROOT,
             env=env,
             capture_output=True,
             text=True,

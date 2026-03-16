@@ -1,0 +1,11 @@
+#!/bin/zsh
+set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SERVICE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+export NEXUS_DEPLOY_ROOT="${NEXUS_DEPLOY_ROOT:-$SERVICE_ROOT}"
+export NEXUS_DATA_ROOT="${NEXUS_DATA_ROOT:-$SERVICE_ROOT/data}"
+export PYTHONPATH="$SERVICE_ROOT/src"
+
+exec python3 -m micsync.cli "$@"

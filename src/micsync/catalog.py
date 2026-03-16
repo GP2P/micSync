@@ -54,6 +54,32 @@ class Catalog:
                     last_updated_at text not null default (datetime('now'))
                 );
 
+                create table if not exists source_files (
+                    id integer primary key,
+                    source_key text not null unique,
+                    segment_id integer references segments(id),
+                    source_volume_label text,
+                    source_volume_identifier text,
+                    source_mount_path text,
+                    source_parent_folder text,
+                    source_filename text,
+                    source_relative_path text,
+                    physical_mic_id integer not null default 0,
+                    raw_relative_path text,
+                    source_size_bytes integer,
+                    source_checksum text,
+                    recording_start_at text,
+                    recording_end_at text,
+                    duration_ms integer,
+                    variant text,
+                    mirror_status text,
+                    first_seen_at text,
+                    last_attempted_at text,
+                    mirrored_at text,
+                    error_phase text,
+                    error_detail text
+                );
+
                 create table if not exists artifacts (
                     id integer primary key,
                     take_id integer not null references takes(id),
@@ -268,6 +294,115 @@ class Catalog:
                 ),
             ).fetchone()
 
+    def upsert_source_file(
+        self,
+        *,
+        source_key: str,
+        segment_id: int | None,
+        source_volume_label: str | None,
+        source_volume_identifier: str | None,
+        source_mount_path: str | None,
+        source_parent_folder: str | None,
+        source_filename: str,
+        source_relative_path: str,
+        physical_mic_id: int,
+        raw_relative_path: str,
+        source_size_bytes: int,
+        source_checksum: str,
+        recording_start_at: str | None,
+        recording_end_at: str | None,
+        duration_ms: int | None,
+        variant: str | None,
+        mirror_status: str,
+        first_seen_at: str | None,
+        last_attempted_at: str | None,
+        mirrored_at: str | None,
+        error_phase: str | None,
+        error_detail: str | None,
+    ) -> int:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into source_files (
+                    source_key,
+                    segment_id,
+                    source_volume_label,
+                    source_volume_identifier,
+                    source_mount_path,
+                    source_parent_folder,
+                    source_filename,
+                    source_relative_path,
+                    physical_mic_id,
+                    raw_relative_path,
+                    source_size_bytes,
+                    source_checksum,
+                    recording_start_at,
+                    recording_end_at,
+                    duration_ms,
+                    variant,
+                    mirror_status,
+                    first_seen_at,
+                    last_attempted_at,
+                    mirrored_at,
+                    error_phase,
+                    error_detail
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(source_key) do update set
+                    segment_id=excluded.segment_id,
+                    source_volume_label=excluded.source_volume_label,
+                    source_volume_identifier=excluded.source_volume_identifier,
+                    source_mount_path=excluded.source_mount_path,
+                    source_parent_folder=excluded.source_parent_folder,
+                    source_filename=excluded.source_filename,
+                    source_relative_path=excluded.source_relative_path,
+                    physical_mic_id=excluded.physical_mic_id,
+                    raw_relative_path=excluded.raw_relative_path,
+                    source_size_bytes=excluded.source_size_bytes,
+                    source_checksum=excluded.source_checksum,
+                    recording_start_at=coalesce(excluded.recording_start_at, source_files.recording_start_at),
+                    recording_end_at=coalesce(excluded.recording_end_at, source_files.recording_end_at),
+                    duration_ms=coalesce(excluded.duration_ms, source_files.duration_ms),
+                    variant=excluded.variant,
+                    mirror_status=excluded.mirror_status,
+                    first_seen_at=coalesce(source_files.first_seen_at, excluded.first_seen_at),
+                    last_attempted_at=excluded.last_attempted_at,
+                    mirrored_at=coalesce(excluded.mirrored_at, source_files.mirrored_at),
+                    error_phase=excluded.error_phase,
+                    error_detail=excluded.error_detail
+                """,
+                (
+                    source_key,
+                    segment_id,
+                    source_volume_label,
+                    source_volume_identifier,
+                    source_mount_path,
+                    source_parent_folder,
+                    source_filename,
+                    source_relative_path,
+                    physical_mic_id,
+                    raw_relative_path,
+                    source_size_bytes,
+                    source_checksum,
+                    recording_start_at,
+                    recording_end_at,
+                    duration_ms,
+                    variant,
+                    mirror_status,
+                    first_seen_at,
+                    last_attempted_at,
+                    mirrored_at,
+                    error_phase,
+                    error_detail,
+                ),
+            )
+            row = conn.execute(
+                "select id from source_files where source_key = ?",
+                (source_key,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("source file upsert failed")
+            return int(row["id"])
+
     def insert_artifact(self, **fields: Any) -> int:
         columns = ", ".join(fields.keys())
         placeholders = ", ".join("?" for _ in fields)
@@ -297,6 +432,16 @@ class Catalog:
             ).fetchone()
             if row is None:
                 raise KeyError(segment_id)
+            return row
+
+    def fetch_source_file(self, source_file_id: int) -> sqlite3.Row:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from source_files where id = ?",
+                (source_file_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(source_file_id)
             return row
 
     def fetch_artifact(self, artifact_id: int) -> sqlite3.Row:

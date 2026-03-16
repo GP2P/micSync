@@ -30,7 +30,7 @@ class CatalogTest(unittest.TestCase):
             row = catalog.fetch_take(take_id_1)
             self.assertIsNotNone(row["first_imported_at"])
 
-    def test_artifact_rows_preserve_segment_key(self) -> None:
+    def test_source_files_attach_to_segments_and_preserve_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "recordings.sqlite3"
             catalog = Catalog(db_path)
@@ -56,12 +56,64 @@ class CatalogTest(unittest.TestCase):
                 last_attempted_at="2026-06-08T11:21:00",
                 completed_at="2026-06-08T11:21:00",
             )
-            artifact_id = catalog.insert_artifact(
-                take_id=take_id,
+            source_file_id = catalog.upsert_source_file(
+                source_key="MIC 01/TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",
                 segment_id=segment_id,
-                segment_key="20260608_112048_TX02_MIC001",
+                source_volume_label="MIC 01",
+                source_volume_identifier="MIC 01",
+                source_mount_path="/Volumes/MIC 01",
+                source_parent_folder="TX_MIC001_20260308_143058",
                 source_filename="TX02_MIC001_20260608_112048_orig.wav",
-                import_status="imported",
+                source_relative_path="TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",
+                physical_mic_id=1,
+                raw_relative_path="raw/MIC_01/TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",
+                source_size_bytes=123,
+                source_checksum="abc123",
+                recording_start_at="2026-06-08T11:20:48",
+                recording_end_at=None,
+                duration_ms=None,
+                variant="orig",
+                mirror_status="mirrored",
+                first_seen_at="2026-06-08T11:21:00",
+                last_attempted_at="2026-06-08T11:21:00",
+                mirrored_at="2026-06-08T11:21:02",
+                error_phase=None,
+                error_detail=None,
             )
-            row = catalog.fetch_artifact(artifact_id)
-            self.assertEqual(row["segment_key"], "20260608_112048_TX02_MIC001")
+            row = catalog.fetch_source_file(source_file_id)
+            self.assertEqual(row["segment_id"], segment_id)
+            self.assertEqual(row["variant"], "orig")
+            self.assertEqual(row["raw_relative_path"], "raw/MIC_01/TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav")
+
+    def test_source_files_can_exist_before_segment_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "recordings.sqlite3"
+            catalog = Catalog(db_path)
+
+            source_file_id = catalog.upsert_source_file(
+                source_key="MIC 01/TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",
+                segment_id=None,
+                source_volume_label="MIC 01",
+                source_volume_identifier="MIC 01",
+                source_mount_path="/Volumes/MIC 01",
+                source_parent_folder="TX_MIC001_20260308_143058",
+                source_filename="TX02_MIC001_20260608_112048_orig.wav",
+                source_relative_path="TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",
+                physical_mic_id=1,
+                raw_relative_path="raw/MIC_01/TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",
+                source_size_bytes=123,
+                source_checksum="abc123",
+                recording_start_at="2026-06-08T11:20:48",
+                recording_end_at=None,
+                duration_ms=None,
+                variant="orig",
+                mirror_status="mirrored",
+                first_seen_at="2026-06-08T11:21:00",
+                last_attempted_at="2026-06-08T11:21:00",
+                mirrored_at="2026-06-08T11:21:02",
+                error_phase=None,
+                error_detail=None,
+            )
+
+            row = catalog.fetch_source_file(source_file_id)
+            self.assertIsNone(row["segment_id"])

@@ -10,12 +10,15 @@ from typing import Mapping
 class Config:
     runtime_root: Path
     recordings_root: Path
-    recordings_audio_root: Path
+    recordings_raw_root: Path
+    recordings_derived_root: Path
     recordings_db_path: Path
     recordings_tmp_root: Path
     max_file_size_mb: int | None
     extension_allowlist: tuple[str, ...]
     variant_policy: str
+    enable_derived_outputs: bool
+    derived_outputs_strategy: str
     segment_cadence_seconds: int
     segment_group_tolerance_ms: int
     stale_lock_timeout_seconds: int
@@ -38,7 +41,7 @@ def _coerce_bool(value: str | None, default: bool) -> bool:
 def build_config(nexus_data_root: Path, env: Mapping[str, str]) -> Config:
     runtime_root = Path(env.get("MICSYNC_RUNTIME_ROOT", str(nexus_data_root / "micSync")))
     recordings_root = Path(
-        env.get("MICSYNC_RECORDINGS_ROOT", str(nexus_data_root / "recordings"))
+        env.get("MICSYNC_RECORDINGS_ROOT", str(nexus_data_root / "recordings" / "audio"))
     )
     recordings_db_path = Path(
         env.get(
@@ -54,12 +57,21 @@ def build_config(nexus_data_root: Path, env: Mapping[str, str]) -> Config:
     return Config(
         runtime_root=runtime_root,
         recordings_root=recordings_root,
-        recordings_audio_root=recordings_root / "audio",
+        recordings_raw_root=recordings_root / "raw",
+        recordings_derived_root=recordings_root / "derived",
         recordings_db_path=recordings_db_path,
         recordings_tmp_root=recordings_root / "tmp",
         max_file_size_mb=_coerce_optional_int(env.get("MICSYNC_MAX_FILE_SIZE_MB")),
         extension_allowlist=extension_allowlist,
         variant_policy=env.get("MICSYNC_VARIANT_POLICY", "all"),
+        enable_derived_outputs=_coerce_bool(
+            env.get("MICSYNC_ENABLE_DERIVED_OUTPUTS"),
+            False,
+        ),
+        derived_outputs_strategy=env.get(
+            "MICSYNC_DERIVED_OUTPUTS_STRATEGY",
+            "clone_then_copy",
+        ),
         segment_cadence_seconds=int(env.get("MICSYNC_SEGMENT_CADENCE_SECONDS", "1800")),
         segment_group_tolerance_ms=int(
             env.get("MICSYNC_SEGMENT_GROUP_TOLERANCE_MS", "1000")

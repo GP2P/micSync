@@ -1,11 +1,48 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from micsync.catalog import Catalog
 
 
 class CatalogTest(unittest.TestCase):
+    def test_connect_context_closes_connection(self) -> None:
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.row_factory = None
+                self.closed = False
+                self.commit_called = False
+                self.rollback_called = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def commit(self) -> None:
+                self.commit_called = True
+
+            def rollback(self) -> None:
+                self.rollback_called = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "recordings.sqlite3"
+            catalog = Catalog(db_path)
+            fake_connection = FakeConnection()
+
+            with patch("micsync.catalog.sqlite3.connect", return_value=fake_connection):
+                with catalog._connect() as conn:
+                    self.assertIs(conn, fake_connection)
+
+            self.assertTrue(fake_connection.commit_called)
+            self.assertFalse(fake_connection.rollback_called)
+            self.assertTrue(fake_connection.closed)
+
     def test_upsert_take_creates_one_take_and_reuses_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "recordings.sqlite3"

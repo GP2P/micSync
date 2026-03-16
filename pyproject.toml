@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "micsync"
+name = "micSync"
 version = "0.1.0"
 description = "Host-side importer for DJI Mic recordings"
 requires-python = ">=3.11"

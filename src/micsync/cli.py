@@ -37,7 +37,7 @@ class RunSummary:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="micsync",
+        prog="micSync",
         description="Import DJI Mic recordings into the shared recordings root.",
     )
     parser.add_argument("--max-file-size-mb", type=int, default=None)

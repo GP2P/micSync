@@ -24,10 +24,10 @@ class CliSmokeTest(unittest.TestCase):
 
     def test_standalone_wrapper_prefers_explicit_environment_roots(self) -> None:
         env = os.environ.copy()
-        env["NEXUS_DEPLOY_ROOT"] = "/tmp/micsync-deploy-root"
-        env["NEXUS_DATA_ROOT"] = "/tmp/micsync-test-data"
+        env["NEXUS_DEPLOY_ROOT"] = "/tmp/micSync-deploy-root"
+        env["NEXUS_DATA_ROOT"] = "/tmp/micSync-test-data"
         result = subprocess.run(
-            [str(SERVICE_ROOT / "scripts" / "micsync.sh"), "--help"],
+            [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--help"],
             cwd=SERVICE_ROOT,
             env=env,
             capture_output=True,
@@ -41,7 +41,7 @@ class CliSmokeTest(unittest.TestCase):
         env.pop("NEXUS_DEPLOY_ROOT", None)
         env.pop("NEXUS_DATA_ROOT", None)
         result = subprocess.run(
-            [str(SERVICE_ROOT / "scripts" / "micsync.sh"), "--help"],
+            [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--help"],
             cwd=SERVICE_ROOT,
             env=env,
             capture_output=True,
@@ -55,7 +55,7 @@ class CliSmokeTest(unittest.TestCase):
         env.pop("NEXUS_DEPLOY_ROOT", None)
         env.pop("NEXUS_DATA_ROOT", None)
         result = subprocess.run(
-            [str(SERVICE_ROOT / "scripts" / "micsync.sh"), "--stop"],
+            [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--stop"],
             cwd=SERVICE_ROOT,
             env=env,
             capture_output=True,

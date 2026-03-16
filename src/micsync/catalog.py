@@ -449,6 +449,14 @@ class Catalog:
                 raise KeyError(source_file_id)
             return row
 
+    def fetch_source_file_by_key(self, source_key: str) -> sqlite3.Row | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from source_files where source_key = ?",
+                (source_key,),
+            ).fetchone()
+            return row
+
     def fetch_pending_source_files_for_derivation(self) -> list[sqlite3.Row]:
         with self._connect() as conn:
             rows = conn.execute(

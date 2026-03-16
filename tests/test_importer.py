@@ -187,6 +187,60 @@ class ImporterTest(unittest.TestCase):
             self.assertEqual(outcome.raw_path, existing_raw)
             self.assertFalse((root / "recordings" / "audio" / "tmp").exists())
 
+    def test_mirror_recording_to_raw_skips_checksum_when_duplicate_metadata_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_mount = root / "MIC 01"
+            source_dir = source_mount / "TX_MIC001_20260308_143058"
+            source_dir.mkdir(parents=True)
+            source_file = source_dir / "TX02_MIC001_20260608_112048_orig.wav"
+            source_file.write_bytes(b"same-audio")
+            source_created_at = datetime(2024, 1, 2, 3, 4, 5)
+            source_modified_at = datetime(2024, 1, 2, 4, 5, 6)
+            subprocess.run(
+                [
+                    "SetFile",
+                    "-d",
+                    source_created_at.strftime("%m/%d/%Y %H:%M:%S"),
+                    str(source_file),
+                ],
+                check=True,
+            )
+            os.utime(
+                source_file,
+                (
+                    source_modified_at.timestamp(),
+                    source_modified_at.timestamp(),
+                ),
+            )
+            catalog = Catalog(root / "recordings" / "audio" / "db" / "recordings.sqlite3")
+
+            first_outcome = mirror_recording_to_raw(
+                source_path=source_file,
+                source_mount_path=source_mount,
+                source_parent_folder=source_dir.name,
+                volume_label="MIC 01",
+                recordings_root=root / "recordings" / "audio",
+                tmp_root=root / "recordings" / "audio" / "tmp",
+                catalog=catalog,
+                log_path=root / "micSync" / "logs" / "runs.log",
+            )
+
+            with patch("micsync.importer._measure_file_with_checksum", side_effect=AssertionError("unexpected checksum")):
+                second_outcome = mirror_recording_to_raw(
+                    source_path=source_file,
+                    source_mount_path=source_mount,
+                    source_parent_folder=source_dir.name,
+                    volume_label="MIC 01",
+                    recordings_root=root / "recordings" / "audio",
+                    tmp_root=root / "recordings" / "audio" / "tmp",
+                    catalog=catalog,
+                    log_path=root / "micSync" / "logs" / "runs.log",
+                )
+
+            self.assertEqual(first_outcome.raw_path, second_outcome.raw_path)
+            self.assertEqual(second_outcome.status, "duplicate")
+
     def test_derive_mirrored_recording_assigns_take_and_segment(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

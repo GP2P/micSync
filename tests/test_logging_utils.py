@@ -42,6 +42,31 @@ class LoggingUtilsTest(unittest.TestCase):
             "26.03.16 02:43:58 | mirror    |  3/12 | 15.1/44.1 GB, 34% |  38.07MB | raw/MIC_01/TX_MIC002_20260309_191135/TX00_MIC021_20260310_212650_edit.wav",
         )
 
+    def test_build_progress_line_aligns_current_index_to_total_width(self) -> None:
+        line_99 = build_progress_line(
+            action="normalize",
+            current_index=99,
+            total_count=317,
+            processed_bytes=1,
+            total_bytes=3,
+            file_size_bytes=1_000_000,
+            path="derived/normalized/example-99.wav",
+            when=datetime(2026, 3, 16, 5, 49, 49),
+        )
+        line_100 = build_progress_line(
+            action="normalize",
+            current_index=100,
+            total_count=317,
+            processed_bytes=2,
+            total_bytes=3,
+            file_size_bytes=1_000_000,
+            path="derived/normalized/example-100.wav",
+            when=datetime(2026, 3, 16, 5, 49, 49),
+        )
+
+        self.assertIn("| normalize |  99/317 |", line_99)
+        self.assertIn("| normalize | 100/317 |", line_100)
+
     def test_build_run_logger_appends_to_file_and_stdout_when_echo_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "logs" / "runs.log"

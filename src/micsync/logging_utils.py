@@ -66,9 +66,10 @@ def build_progress_line(
     path: str,
     when: datetime | None = None,
 ) -> str:
+    count_width = max(2, len(str(total_count)))
     return (
         f"{format_log_timestamp(when)} | {action:<9} | "
-        f"{current_index:>2}/{total_count} | "
+        f"{current_index:>{count_width}}/{total_count} | "
         f"{_format_progress_gb_and_percent(processed_bytes, total_bytes)} | "
         f"{_format_decimal_mb(file_size_bytes)} | "
         f"{path}"

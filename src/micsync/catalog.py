@@ -411,6 +411,24 @@ class Catalog:
                 raise KeyError(source_file_id)
             return row
 
+    def fetch_pending_source_files_for_derivation(self) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select *
+                from source_files
+                where segment_id is null
+                order by
+                    case when recording_start_at is null then 1 else 0 end,
+                    recording_start_at asc,
+                    physical_mic_id asc,
+                    coalesce(source_parent_folder, '') asc,
+                    source_filename asc,
+                    id asc
+                """
+            ).fetchall()
+            return list(rows)
+
     def assign_source_file_to_segment(self, *, source_file_id: int, segment_id: int) -> None:
         with self._connect() as conn:
             conn.execute(

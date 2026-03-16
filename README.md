@@ -81,6 +81,7 @@ Each run has two stages.
 
 2. Derive stage
    `micSync` reads the local mirrored raw files, parses timestamps and variants, updates `segments` and `takes`, and optionally generates normalized files under `derived/`.
+   Pending derivations are processed from the database in ascending `recording_start_at` order so forward-only grouping follows time instead of raw path order.
 
 The important boundary is that the raw mirror becomes the local system of record. Once a file has been mirrored and verified, the database and optional derived outputs can be rebuilt without needing the mic to remain connected.
 

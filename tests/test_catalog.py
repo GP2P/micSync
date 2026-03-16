@@ -154,3 +154,88 @@ class CatalogTest(unittest.TestCase):
 
             row = catalog.fetch_source_file(source_file_id)
             self.assertIsNone(row["segment_id"])
+
+    def test_pending_source_files_for_derivation_are_ordered_by_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "recordings.sqlite3"
+            catalog = Catalog(db_path)
+
+            earliest_id = catalog.upsert_source_file(
+                source_key="raw/MIC_01/A/TX01_MIC001_20260308_142705_orig.wav",
+                segment_id=None,
+                source_volume_label="MIC 01",
+                source_volume_identifier="MIC 01",
+                source_mount_path="/Volumes/MIC 01",
+                source_parent_folder="A",
+                source_filename="TX01_MIC001_20260308_142705_orig.wav",
+                source_relative_path="A/TX01_MIC001_20260308_142705_orig.wav",
+                physical_mic_id=1,
+                raw_relative_path="raw/MIC_01/A/TX01_MIC001_20260308_142705_orig.wav",
+                source_size_bytes=123,
+                source_checksum="checksum-1",
+                recording_start_at="2026-03-08T14:27:05",
+                recording_end_at=None,
+                duration_ms=None,
+                variant="orig",
+                mirror_status="mirrored",
+                first_seen_at="2026-03-08T14:28:00",
+                last_attempted_at="2026-03-08T14:28:00",
+                mirrored_at="2026-03-08T14:28:00",
+                error_phase=None,
+                error_detail=None,
+            )
+            latest_id = catalog.upsert_source_file(
+                source_key="raw/MIC_01/A/TX01_MIC003_20260308_143556_orig.wav",
+                segment_id=None,
+                source_volume_label="MIC 01",
+                source_volume_identifier="MIC 01",
+                source_mount_path="/Volumes/MIC 01",
+                source_parent_folder="A",
+                source_filename="TX01_MIC003_20260308_143556_orig.wav",
+                source_relative_path="A/TX01_MIC003_20260308_143556_orig.wav",
+                physical_mic_id=1,
+                raw_relative_path="raw/MIC_01/A/TX01_MIC003_20260308_143556_orig.wav",
+                source_size_bytes=123,
+                source_checksum="checksum-3",
+                recording_start_at="2026-03-08T14:35:56",
+                recording_end_at=None,
+                duration_ms=None,
+                variant="orig",
+                mirror_status="mirrored",
+                first_seen_at="2026-03-08T14:36:00",
+                last_attempted_at="2026-03-08T14:36:00",
+                mirrored_at="2026-03-08T14:36:00",
+                error_phase=None,
+                error_detail=None,
+            )
+            middle_id = catalog.upsert_source_file(
+                source_key="raw/MIC_01/A/TX01_MIC002_20260308_143543_orig.wav",
+                segment_id=None,
+                source_volume_label="MIC 01",
+                source_volume_identifier="MIC 01",
+                source_mount_path="/Volumes/MIC 01",
+                source_parent_folder="A",
+                source_filename="TX01_MIC002_20260308_143543_orig.wav",
+                source_relative_path="A/TX01_MIC002_20260308_143543_orig.wav",
+                physical_mic_id=1,
+                raw_relative_path="raw/MIC_01/A/TX01_MIC002_20260308_143543_orig.wav",
+                source_size_bytes=123,
+                source_checksum="checksum-2",
+                recording_start_at="2026-03-08T14:35:43",
+                recording_end_at=None,
+                duration_ms=None,
+                variant="orig",
+                mirror_status="mirrored",
+                first_seen_at="2026-03-08T14:36:00",
+                last_attempted_at="2026-03-08T14:36:00",
+                mirrored_at="2026-03-08T14:36:00",
+                error_phase=None,
+                error_detail=None,
+            )
+
+            ordered_rows = catalog.fetch_pending_source_files_for_derivation()
+
+            self.assertEqual(
+                [int(row["id"]) for row in ordered_rows],
+                [earliest_id, middle_id, latest_id],
+            )

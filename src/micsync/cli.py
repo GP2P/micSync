@@ -103,6 +103,28 @@ def _launch_detached(argv: list[str]) -> int:
     return 0
 
 
+def _pending_derivation_queue(config, catalog: Catalog) -> list[tuple[int, Path, str, int]]:
+    pending_rows = catalog.fetch_pending_source_files_for_derivation()
+    queue: list[tuple[int, Path, str, int]] = []
+    for row in pending_rows:
+        raw_relative_path = row["raw_relative_path"]
+        if not raw_relative_path:
+            continue
+        row_keys = row.keys() if hasattr(row, "keys") else ()
+        existing_warning_count = (
+            1 if "error_detail" in row_keys and row["error_detail"] else 0
+        )
+        queue.append(
+            (
+                int(row["id"]),
+                config.recordings_root / str(raw_relative_path),
+                str(row["source_filename"]),
+                existing_warning_count,
+            )
+        )
+    return queue
+
+
 def run_import(args: argparse.Namespace) -> int:
     config = _load_config(args)
     run_root = config.runtime_root / "run"
@@ -268,17 +290,24 @@ def run_import(args: argparse.Namespace) -> int:
                     else:
                         log_event(f"micSync failed to eject volume {label}")
 
-            for mirrored in mirrored_outcomes:
+            for (
+                source_file_id,
+                raw_path,
+                source_filename,
+                existing_warning_count,
+            ) in _pending_derivation_queue(
+                config, catalog
+            ):
                 if signal_stop_requested["value"] or lock.consume_stop_request():
                     summary.stopped = True
                     log_event("micSync stop requested during derive stage")
                     break
-                log_event(f"micSync deriving {mirrored.raw_path.name}")
-                lock.refresh(f"deriving {mirrored.raw_path.name}")
+                log_event(f"micSync deriving {source_filename}")
+                lock.refresh(f"deriving {source_filename}")
                 try:
                     derived = derive_mirrored_recording(
-                        raw_path=mirrored.raw_path,
-                        source_file_id=mirrored.source_file_id,
+                        raw_path=raw_path,
+                        source_file_id=source_file_id,
                         catalog=catalog,
                         log_path=log_path,
                         log_event=log_event,
@@ -289,12 +318,14 @@ def run_import(args: argparse.Namespace) -> int:
                         segment_group_tolerance_ms=config.segment_group_tolerance_ms,
                     )
                     summary.derived_count += 1
-                    summary.warning_count += max(0, derived.warning_count - mirrored.warning_count)
+                    summary.warning_count += max(
+                        0, derived.warning_count - existing_warning_count
+                    )
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
                     log_event(
                         "micSync failed "
-                        f"phase=derive path={mirrored.raw_path} error={exc}"
+                        f"phase=derive path={raw_path} error={exc}"
                     )
 
             if summary.stopped:

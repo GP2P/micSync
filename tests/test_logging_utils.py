@@ -25,21 +25,21 @@ class LoggingUtilsTest(unittest.TestCase):
             "26.03.16 02:43:58 | event     | micSync scanning mounted volumes",
         )
 
-    def test_build_progress_line_formats_aligned_megabytes(self) -> None:
+    def test_build_progress_line_formats_gigabytes_and_percentage(self) -> None:
         line = build_progress_line(
             action="mirror",
             current_index=3,
             total_count=12,
-            processed_bytes=400_000_000,
-            total_bytes=5_800_000_000,
-            file_size_bytes=233_000_000,
+            processed_bytes=15_100_000_000,
+            total_bytes=44_100_000_000,
+            file_size_bytes=38_070_000,
             path="raw/MIC_01/TX_MIC002_20260309_191135/TX00_MIC021_20260310_212650_edit.wav",
             when=datetime(2026, 3, 16, 2, 43, 58),
         )
 
         self.assertEqual(
             line,
-            "26.03.16 02:43:58 | mirror    |  3/12 |    400MB /  5800MB | 233.00MB | raw/MIC_01/TX_MIC002_20260309_191135/TX00_MIC021_20260310_212650_edit.wav",
+            "26.03.16 02:43:58 | mirror    |  3/12 | 15.1/44.1 GB, 34% |  38.07MB | raw/MIC_01/TX_MIC002_20260309_191135/TX00_MIC021_20260310_212650_edit.wav",
         )
 
     def test_build_run_logger_appends_to_file_and_stdout_when_echo_enabled(self) -> None:

@@ -44,6 +44,13 @@ def _format_decimal_mb(size_bytes: int) -> str:
     return f"{size_mb:>6.2f}MB"
 
 
+def _format_progress_gb_and_percent(processed_bytes: int, total_bytes: int) -> str:
+    processed_gb = processed_bytes / 1_000_000_000
+    total_gb = total_bytes / 1_000_000_000 if total_bytes else 0
+    percent = round((processed_bytes / total_bytes) * 100) if total_bytes else 0
+    return f"{processed_gb:>4.1f}/{total_gb:>4.1f} GB, {percent:.0f}%"
+
+
 def build_event_line(message: str, *, kind: str = "event", when: datetime | None = None) -> str:
     return f"{format_log_timestamp(when)} | {kind:<9} | {message}"
 
@@ -62,8 +69,7 @@ def build_progress_line(
     return (
         f"{format_log_timestamp(when)} | {action:<9} | "
         f"{current_index:>2}/{total_count} | "
-        f"{_format_integer_mb(processed_bytes, width=8)} / "
-        f"{_format_integer_mb(total_bytes, width=7)} | "
+        f"{_format_progress_gb_and_percent(processed_bytes, total_bytes)} | "
         f"{_format_decimal_mb(file_size_bytes)} | "
         f"{path}"
     )

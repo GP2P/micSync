@@ -583,11 +583,11 @@ class CliRunTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("micSync mirror starting candidates=2 total=400MB", stdout.getvalue())
         self.assertIn(
-            "| mirror    |  1/2 |    233MB /   400MB | 233.00MB | raw/MIC_01/A/TX01_MIC001_20260315_120000.wav",
+            "| mirror    |  1/2 |  0.2/ 0.4 GB, 58% | 233.00MB | raw/MIC_01/A/TX01_MIC001_20260315_120000.wav",
             stdout.getvalue(),
         )
         self.assertIn(
-            "| mirror    |  2/2 |    400MB /   400MB | 167.00MB | raw/MIC_01/A/TX01_MIC001_20260315_123000.wav",
+            "| mirror    |  2/2 |  0.4/ 0.4 GB, 100% | 167.00MB | raw/MIC_01/A/TX01_MIC001_20260315_123000.wav",
             stdout.getvalue(),
         )
 
@@ -698,7 +698,7 @@ class CliRunTest(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertIn(
-            "| normalize |  1/1 |    233MB /   233MB | 233.00MB | derived/normalized/2026/03/15/20260315_120000_TX01_MIC001.wav",
+            "| normalize |  1/1 |  0.2/ 0.2 GB, 100% | 233.00MB | derived/normalized/2026/03/15/20260315_120000_TX01_MIC001.wav",
             stdout.getvalue(),
         )
 

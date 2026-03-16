@@ -19,6 +19,13 @@ Local runtime file:
 
 - Deploy: `$NEXUS_DATA_ROOT/micSync/config/micsync.env`
 
+Important grouping settings:
+
+- `MICSYNC_SEGMENT_CADENCE_SECONDS=1800`
+- `MICSYNC_SEGMENT_GROUP_TOLERANCE_MS=1000`
+
+These control when adjacent DJI chunks collapse into the same take in the shared recordings DB.
+
 ## Shortcut Command
 
 Use this wrapper from macOS Shortcuts:

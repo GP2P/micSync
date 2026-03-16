@@ -62,10 +62,24 @@ def _recordings_relative_dir(start_at: datetime) -> Path:
     return Path("audio") / start_at.strftime("%Y") / start_at.strftime("%m") / start_at.strftime("%d")
 
 
-def _derive_take_key(*, segment_key: str) -> str:
-    # Conservative v1 grouping: each segment starts as its own take until
-    # continuity-linking heuristics across multiple 30-minute chunks are added.
-    return segment_key
+def _should_group_with_previous(
+    *,
+    previous_segment_end_at: str | None,
+    previous_duration_ms: int | None,
+    current_start_at: datetime,
+    segment_cadence_seconds: int,
+    segment_group_tolerance_ms: int,
+) -> bool:
+    if previous_segment_end_at is None or previous_duration_ms is None:
+        return False
+
+    cadence_ms = segment_cadence_seconds * 1000
+    if abs(previous_duration_ms - cadence_ms) > segment_group_tolerance_ms:
+        return False
+
+    previous_end_at = datetime.fromisoformat(previous_segment_end_at)
+    delta_ms = abs(int((current_start_at - previous_end_at).total_seconds() * 1000))
+    return delta_ms <= segment_group_tolerance_ms
 
 
 def _copy_with_checksum(source_path: Path, tmp_path: Path) -> tuple[str, int]:
@@ -94,10 +108,11 @@ def import_recording(
     log_path: Path,
     run_id: str,
     audio_subdir: str | None = None,
+    segment_cadence_seconds: int = 1800,
+    segment_group_tolerance_ms: int = 1000,
 ) -> ImportOutcome:
     parsed: ParsedRecordingName = parse_recording_name(source_path.name)
     segment_key = parsed.recording_group_key
-    take_key = _derive_take_key(segment_key=segment_key)
     recording_start_at = parsed.start_at.isoformat(timespec="seconds")
     duration_ms = read_duration_ms(source_path)
     recording_end_at = derive_end_time(recording_start_at, duration_ms)
@@ -107,6 +122,26 @@ def import_recording(
         warning_messages.append(
             "zero-byte source file; recording may be incomplete and end time unavailable"
         )
+
+    previous_segment = catalog.find_latest_segment_for_session(
+        tx_slot=parsed.tx_slot,
+        physical_mic_id=physical_mic_id,
+        source_parent_folder=source_parent_folder,
+        before_start_at=recording_start_at,
+    )
+    if previous_segment and _should_group_with_previous(
+        previous_segment_end_at=previous_segment["segment_end_at"],
+        previous_duration_ms=previous_segment["duration_ms"],
+        current_start_at=parsed.start_at,
+        segment_cadence_seconds=segment_cadence_seconds,
+        segment_group_tolerance_ms=segment_group_tolerance_ms,
+    ):
+        take_key = str(previous_segment["take_key"])
+        segment_index = int(previous_segment["segment_index"] or 0) + 1
+    else:
+        take_key = segment_key
+        segment_index = 0
+
     take_id = catalog.upsert_take(
         take_key=take_key,
         take_start_at=recording_start_at,
@@ -120,6 +155,7 @@ def import_recording(
     segment_id = catalog.upsert_segment(
         take_id=take_id,
         segment_key=segment_key,
+        segment_index=segment_index,
         segment_start_at=recording_start_at,
         segment_end_at=recording_end_at,
         tx_slot=parsed.tx_slot,

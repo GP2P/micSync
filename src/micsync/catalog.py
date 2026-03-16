@@ -111,8 +111,16 @@ class Catalog:
                     health_status
                 ) values (?, ?, ?, ?, ?, ?, ?)
                 on conflict(take_key) do update set
-                    take_start_at=excluded.take_start_at,
-                    take_end_at=coalesce(excluded.take_end_at, takes.take_end_at),
+                    take_start_at=case
+                        when excluded.take_start_at < takes.take_start_at then excluded.take_start_at
+                        else takes.take_start_at
+                    end,
+                    take_end_at=case
+                        when takes.take_end_at is null then excluded.take_end_at
+                        when excluded.take_end_at is null then takes.take_end_at
+                        when excluded.take_end_at > takes.take_end_at then excluded.take_end_at
+                        else takes.take_end_at
+                    end,
                     tx_slot=excluded.tx_slot,
                     physical_mic_id=excluded.physical_mic_id,
                     source_parent_folder=excluded.source_parent_folder,
@@ -145,6 +153,7 @@ class Catalog:
         *,
         take_id: int,
         segment_key: str,
+        segment_index: int = 0,
         segment_start_at: str,
         segment_end_at: str | None,
         tx_slot: str,
@@ -165,6 +174,7 @@ class Catalog:
                 insert into segments (
                     take_id,
                     segment_key,
+                    segment_index,
                     segment_start_at,
                     segment_end_at,
                     tx_slot,
@@ -178,9 +188,10 @@ class Catalog:
                     health_status,
                     anomaly_code,
                     anomaly_detail
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(segment_key) do update set
                     take_id=excluded.take_id,
+                    segment_index=excluded.segment_index,
                     segment_start_at=excluded.segment_start_at,
                     segment_end_at=coalesce(excluded.segment_end_at, segments.segment_end_at),
                     tx_slot=excluded.tx_slot,
@@ -202,6 +213,7 @@ class Catalog:
                 (
                     take_id,
                     segment_key,
+                    segment_index,
                     segment_start_at,
                     segment_end_at,
                     tx_slot,
@@ -224,6 +236,37 @@ class Catalog:
             if row is None:
                 raise RuntimeError("segment upsert failed")
             return int(row["id"])
+
+    def find_latest_segment_for_session(
+        self,
+        *,
+        tx_slot: str,
+        physical_mic_id: int,
+        source_parent_folder: str,
+        before_start_at: str,
+    ) -> sqlite3.Row | None:
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                select
+                    s.*,
+                    t.take_key
+                from segments s
+                join takes t on t.id = s.take_id
+                where s.tx_slot = ?
+                  and s.physical_mic_id = ?
+                  and coalesce(s.source_parent_folder, '') = coalesce(?, '')
+                  and s.segment_start_at < ?
+                order by s.segment_start_at desc
+                limit 1
+                """,
+                (
+                    tx_slot,
+                    physical_mic_id,
+                    source_parent_folder,
+                    before_start_at,
+                ),
+            ).fetchone()
 
     def insert_artifact(self, **fields: Any) -> int:
         columns = ", ".join(fields.keys())

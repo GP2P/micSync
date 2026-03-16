@@ -86,6 +86,13 @@ def run_import(args: argparse.Namespace) -> int:
                 exclude_volume_labels={"Macintosh HD"},
             )
             pending_candidates = [c for c in candidates if c.volume_root.name not in {"Macintosh HD"}]
+            pending_candidates.sort(
+                key=lambda candidate: (
+                    candidate.volume_label,
+                    candidate.source_parent_folder,
+                    candidate.source_path.name,
+                )
+            )
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
             if config.notify and pending_candidates:
                 send_notification(
@@ -113,6 +120,8 @@ def run_import(args: argparse.Namespace) -> int:
                         log_path=log_path,
                         run_id=run_id,
                         audio_subdir=args.dest_subdir,
+                        segment_cadence_seconds=config.segment_cadence_seconds,
+                        segment_group_tolerance_ms=config.segment_group_tolerance_ms,
                     )
                     summary.total_bytes += outcome.size_bytes
                     summary.warning_count += outcome.warning_count

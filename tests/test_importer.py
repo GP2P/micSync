@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from micsync.catalog import Catalog
 from micsync.importer import import_recording, plan_destination_path
@@ -125,3 +126,102 @@ class ImporterTest(unittest.TestCase):
             self.assertIn("zero-byte", segment_row["anomaly_detail"])
             self.assertEqual(artifact_row["error_phase"], "source_validation")
             self.assertIn("zero-byte", artifact_row["error_detail"])
+
+    def test_contiguous_full_segments_share_same_take(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_mount = root / "MIC 02"
+            source_dir = source_mount / "TX_MIC001_20260311_195412"
+            source_dir.mkdir(parents=True)
+            first_file = source_dir / "TX02_MIC028_20260311_195412_orig.wav"
+            second_file = source_dir / "TX02_MIC029_20260311_202412_orig.wav"
+            first_file.write_bytes(b"first")
+            second_file.write_bytes(b"second")
+            catalog = Catalog(root / "recordings" / "db" / "recordings.sqlite3")
+
+            with patch(
+                "micsync.importer.read_duration_ms",
+                side_effect=[1800045, 1800045],
+            ):
+                first = import_recording(
+                    source_path=first_file,
+                    source_mount_path=source_mount,
+                    source_parent_folder=source_dir.name,
+                    volume_label="MIC 02",
+                    recordings_root=root / "recordings",
+                    tmp_root=root / "recordings" / "tmp",
+                    catalog=catalog,
+                    log_path=root / "micSync" / "logs" / "runs.log",
+                    run_id="run-300",
+                    segment_cadence_seconds=1800,
+                    segment_group_tolerance_ms=1000,
+                )
+                second = import_recording(
+                    source_path=second_file,
+                    source_mount_path=source_mount,
+                    source_parent_folder=source_dir.name,
+                    volume_label="MIC 02",
+                    recordings_root=root / "recordings",
+                    tmp_root=root / "recordings" / "tmp",
+                    catalog=catalog,
+                    log_path=root / "micSync" / "logs" / "runs.log",
+                    run_id="run-300",
+                    segment_cadence_seconds=1800,
+                    segment_group_tolerance_ms=1000,
+                )
+
+            take_row = catalog.fetch_take(first.take_id)
+            second_segment_row = catalog.fetch_segment(second.segment_id)
+            self.assertEqual(first.take_id, second.take_id)
+            self.assertNotEqual(first.segment_id, second.segment_id)
+            self.assertEqual(catalog.count_rows("takes"), 1)
+            self.assertEqual(catalog.count_rows("segments"), 2)
+            self.assertEqual(take_row["take_start_at"], "2026-03-11T19:54:12")
+            self.assertEqual(take_row["take_end_at"], "2026-03-11T20:54:12")
+            self.assertEqual(second_segment_row["segment_index"], 1)
+
+    def test_grouping_tolerance_can_force_new_take(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_mount = root / "MIC 02"
+            source_dir = source_mount / "TX_MIC001_20260311_195412"
+            source_dir.mkdir(parents=True)
+            first_file = source_dir / "TX02_MIC028_20260311_195412_orig.wav"
+            second_file = source_dir / "TX02_MIC029_20260311_202412_orig.wav"
+            first_file.write_bytes(b"first")
+            second_file.write_bytes(b"second")
+            catalog = Catalog(root / "recordings" / "db" / "recordings.sqlite3")
+
+            with patch(
+                "micsync.importer.read_duration_ms",
+                side_effect=[1800045, 1800045],
+            ):
+                first = import_recording(
+                    source_path=first_file,
+                    source_mount_path=source_mount,
+                    source_parent_folder=source_dir.name,
+                    volume_label="MIC 02",
+                    recordings_root=root / "recordings",
+                    tmp_root=root / "recordings" / "tmp",
+                    catalog=catalog,
+                    log_path=root / "micSync" / "logs" / "runs.log",
+                    run_id="run-301",
+                    segment_cadence_seconds=1800,
+                    segment_group_tolerance_ms=0,
+                )
+                second = import_recording(
+                    source_path=second_file,
+                    source_mount_path=source_mount,
+                    source_parent_folder=source_dir.name,
+                    volume_label="MIC 02",
+                    recordings_root=root / "recordings",
+                    tmp_root=root / "recordings" / "tmp",
+                    catalog=catalog,
+                    log_path=root / "micSync" / "logs" / "runs.log",
+                    run_id="run-301",
+                    segment_cadence_seconds=1800,
+                    segment_group_tolerance_ms=0,
+                )
+
+            self.assertNotEqual(first.take_id, second.take_id)
+            self.assertEqual(catalog.count_rows("takes"), 2)

@@ -16,6 +16,8 @@ class Config:
     max_file_size_mb: int | None
     extension_allowlist: tuple[str, ...]
     variant_policy: str
+    segment_cadence_seconds: int
+    segment_group_tolerance_ms: int
     stale_lock_timeout_seconds: int
     notify: bool
     eject: bool
@@ -58,6 +60,10 @@ def build_config(nexus_data_root: Path, env: Mapping[str, str]) -> Config:
         max_file_size_mb=_coerce_optional_int(env.get("MICSYNC_MAX_FILE_SIZE_MB")),
         extension_allowlist=extension_allowlist,
         variant_policy=env.get("MICSYNC_VARIANT_POLICY", "all"),
+        segment_cadence_seconds=int(env.get("MICSYNC_SEGMENT_CADENCE_SECONDS", "1800")),
+        segment_group_tolerance_ms=int(
+            env.get("MICSYNC_SEGMENT_GROUP_TOLERANCE_MS", "1000")
+        ),
         stale_lock_timeout_seconds=int(
             env.get("MICSYNC_STALE_LOCK_TIMEOUT_SECONDS", "300")
         ),

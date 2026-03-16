@@ -151,6 +151,9 @@ def run_import(args: argparse.Namespace) -> int:
                         source_file_id=mirrored.source_file_id,
                         catalog=catalog,
                         log_path=log_path,
+                        enable_derived_outputs=config.enable_derived_outputs,
+                        derived_root=config.recordings_derived_root,
+                        derived_outputs_strategy=config.derived_outputs_strategy,
                         segment_cadence_seconds=config.segment_cadence_seconds,
                         segment_group_tolerance_ms=config.segment_group_tolerance_ms,
                     )

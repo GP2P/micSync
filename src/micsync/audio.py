@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+import shutil
 import subprocess
 
 
@@ -37,3 +38,27 @@ def read_duration_ms(path: Path) -> int | None:
             except ValueError:
                 return None
     return None
+
+
+def materialize_derived_file(
+    *,
+    source_path: Path,
+    dest_path: Path,
+    strategy: str,
+) -> Path:
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    if dest_path.exists():
+        return dest_path
+
+    if strategy == "clone_then_copy":
+        result = subprocess.run(
+            ["cp", "-c", str(source_path), str(dest_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return dest_path
+
+    shutil.copy2(source_path, dest_path)
+    return dest_path

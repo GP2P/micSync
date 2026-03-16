@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Callable
 
-from micsync.audio import derive_end_time, read_duration_ms
+from micsync.audio import derive_end_time, materialize_derived_file, read_duration_ms
 from micsync.catalog import Catalog
 from micsync.logging_utils import append_run_log
 from micsync.parser import ParsedRecordingName, parse_physical_mic_id, parse_recording_name
@@ -27,6 +27,7 @@ class MirrorOutcome:
 @dataclass(frozen=True)
 class ImportOutcome:
     raw_path: Path
+    derived_path: Path | None
     checksum: str
     size_bytes: int
     status: str
@@ -77,6 +78,16 @@ def _raw_source_dir_name(volume_label: str | None, physical_mic_id: int) -> str:
         if normalized:
             return normalized
     return "UNKNOWN"
+
+
+def _derived_relative_path(parsed: ParsedRecordingName) -> Path:
+    return (
+        Path("normalized")
+        / parsed.start_at.strftime("%Y")
+        / parsed.start_at.strftime("%m")
+        / parsed.start_at.strftime("%d")
+        / parsed.dest_name
+    )
 
 
 def _should_group_with_previous(
@@ -200,6 +211,9 @@ def derive_mirrored_recording(
     source_file_id: int,
     catalog: Catalog,
     log_path: Path,
+    enable_derived_outputs: bool = False,
+    derived_root: Path | None = None,
+    derived_outputs_strategy: str = "clone_then_copy",
     segment_cadence_seconds: int = 1800,
     segment_group_tolerance_ms: int = 1000,
 ) -> ImportOutcome:
@@ -263,9 +277,17 @@ def derive_mirrored_recording(
         anomaly_detail="; ".join(warning_messages) if warning_messages else None,
     )
     catalog.assign_source_file_to_segment(source_file_id=source_file_id, segment_id=segment_id)
+    derived_path: Path | None = None
+    if enable_derived_outputs and derived_root is not None:
+        derived_path = materialize_derived_file(
+            source_path=raw_path,
+            dest_path=derived_root / _derived_relative_path(parsed),
+            strategy=derived_outputs_strategy,
+        )
     append_run_log(log_path, f"derived {raw_path.name} -> take {take_id} segment {segment_id}")
     return ImportOutcome(
         raw_path=raw_path,
+        derived_path=derived_path,
         checksum=str(source_file["source_checksum"]),
         size_bytes=int(source_file["source_size_bytes"]),
         status=str(source_file["mirror_status"]),
@@ -306,6 +328,9 @@ def import_recording(
         source_file_id=mirrored.source_file_id,
         catalog=catalog,
         log_path=log_path,
+        enable_derived_outputs=False,
+        derived_root=None,
+        derived_outputs_strategy="clone_then_copy",
         segment_cadence_seconds=segment_cadence_seconds,
         segment_group_tolerance_ms=segment_group_tolerance_ms,
     )

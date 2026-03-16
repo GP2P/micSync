@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from dataclasses import dataclass
 import os
@@ -56,6 +57,8 @@ def scan_candidates(
     volumes_root: Path = Path("/Volumes"),
     exclude_volume_labels: set[str] | None = None,
     include_volume_roots: list[Path] | None = None,
+    on_volume_start: Callable[[Path], None] | None = None,
+    on_volume_complete: Callable[[Path, int], None] | None = None,
 ) -> list[CandidateFile]:
     if include_volume_roots is None and not volumes_root.exists():
         return []
@@ -70,6 +73,9 @@ def scan_candidates(
     for volume_root in volume_roots:
         if volume_root.name in excluded:
             continue
+        if on_volume_start is not None:
+            on_volume_start(volume_root)
+        volume_candidate_count = 0
         for root, dirnames, files in os.walk(volume_root, topdown=True, onerror=lambda _: None):
             root_path = Path(root)
             if root_path == volume_root:
@@ -110,4 +116,7 @@ def scan_candidates(
                         ),
                     )
                 )
+                volume_candidate_count += 1
+        if on_volume_complete is not None:
+            on_volume_complete(volume_root, volume_candidate_count)
     return candidates

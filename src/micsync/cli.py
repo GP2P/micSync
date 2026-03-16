@@ -233,6 +233,19 @@ def _unpack_derivation_queue_item(
     )
 
 
+def _planned_scan_volume_roots(source_volumes: list[Path]) -> list[Path]:
+    if source_volumes:
+        return source_volumes
+    volumes_root = Path("/Volumes")
+    if not volumes_root.exists():
+        return []
+    return sorted(
+        path
+        for path in volumes_root.iterdir()
+        if path.is_dir() and path.name not in {"Macintosh HD"}
+    )
+
+
 def run_import(args: argparse.Namespace) -> int:
     config = _load_config(args)
     run_root = config.runtime_root / "run"
@@ -298,6 +311,10 @@ def run_import(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGINT, _request_graceful_stop)
     signal.signal(signal.SIGTERM, _request_graceful_stop)
     try:
+        def emit_notification(*, title: str, message: str) -> None:
+            send_notification(title=title, message=message)
+            log_event(build_event_line(f"micSync sent notification title={title}", kind="event"))
+
         log_event(
             build_event_line(
                 "micSync run started "
@@ -337,19 +354,56 @@ def run_import(args: argparse.Namespace) -> int:
                 log_event(build_event_line("micSync stop requested before scan", kind="stop"))
                 break
             lock.refresh("scanning")
-            log_event(build_event_line("micSync scanning mounted volumes", kind="scan"))
+            scan_volume_roots = _planned_scan_volume_roots(source_volumes)
+            log_event(
+                build_event_line(
+                    f"micSync scan started volumes={len(scan_volume_roots)}",
+                    kind="scan",
+                )
+            )
+
+            def on_volume_start(volume_root: Path) -> None:
+                log_event(
+                    build_event_line(
+                        f"micSync scan volume started label={volume_root.name} path={volume_root}",
+                        kind="scan",
+                    )
+                )
+
+            def on_volume_complete(volume_root: Path, candidate_count: int) -> None:
+                log_event(
+                    build_event_line(
+                        f"micSync scan volume complete label={volume_root.name} candidates={candidate_count}",
+                        kind="scan",
+                    )
+                )
+
             candidates = scan_candidates(
                 allow_extensions=set(config.extension_allowlist),
                 max_file_size_mb=config.max_file_size_mb,
                 exclude_volume_labels={"Macintosh HD"},
                 include_volume_roots=source_volumes or None,
+                on_volume_start=on_volume_start,
+                on_volume_complete=on_volume_complete,
             )
             pending_candidates = [c for c in candidates if c.volume_root.name not in {"Macintosh HD"}]
+            log_event(
+                build_event_line(
+                    f"micSync scan complete candidates={len(pending_candidates)} volumes={len(scan_volume_roots)}",
+                    kind="scan",
+                )
+            )
             pending_candidates.sort(
                 key=lambda candidate: (
                     candidate.volume_label,
                     candidate.source_parent_folder,
                     candidate.source_path.name,
+                )
+            )
+            log_event(
+                build_event_line(
+                    f"micSync duplicate preflight started candidates={len(pending_candidates)}",
+                    kind="event",
                 )
             )
             preexisting_duplicates = []
@@ -373,6 +427,15 @@ def run_import(args: argparse.Namespace) -> int:
                 duplicate_only_volumes[candidate.volume_label] = candidate.volume_root
             pending_candidates = mirror_candidates
             summary.duplicate_count += len(preexisting_duplicates)
+            log_event(
+                build_event_line(
+                    "micSync duplicate preflight complete "
+                    f"new={len(pending_candidates)} "
+                    f"existing={len(preexisting_duplicates)} "
+                    f"duplicate_only_volumes={len(duplicate_only_volumes)}",
+                    kind="event",
+                )
+            )
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
             if pending_candidates or preexisting_duplicates:
                 log_event(
@@ -389,12 +452,18 @@ def run_import(args: argparse.Namespace) -> int:
             if config.notify and (pending_candidates or preexisting_duplicates):
                 stop_hint = None
                 if pending_candidates:
-                    stop_hint = (
-                        "copied exact stop command to clipboard"
-                        if copy_to_clipboard(stop_command)
-                        else stop_command
-                    )
-                send_notification(
+                    if copy_to_clipboard(stop_command):
+                        stop_hint = "copied exact stop command to clipboard"
+                        log_event(build_event_line("micSync copied stop command to clipboard", kind="event"))
+                    else:
+                        stop_hint = stop_command
+                        log_event(
+                            build_event_line(
+                                "micSync failed to copy stop command to clipboard; using literal command",
+                                kind="warn",
+                            )
+                        )
+                emit_notification(
                     title="micSync mirror starting",
                     message=build_start_message(
                         candidate_count=len(pending_candidates),
@@ -407,6 +476,12 @@ def run_import(args: argparse.Namespace) -> int:
                 for label, volume_root in duplicate_only_volumes.items():
                     if label in ejected_labels:
                         continue
+                    log_event(
+                        build_event_line(
+                            f"micSync scheduling immediate eject label={label}",
+                            kind="event",
+                        )
+                    )
                     if eject_volume(volume_root):
                         ejected_volumes.append(label)
                         ejected_labels.add(label)
@@ -415,7 +490,6 @@ def run_import(args: argparse.Namespace) -> int:
                         log_event(build_event_line(f"micSync failed to eject volume {label}", kind="fail"))
 
             any_processed = bool(preexisting_duplicates)
-            mirrored_outcomes = []
             processed_mirror_bytes = 0
             for mirror_index, candidate in enumerate(pending_candidates, start=1):
                 if signal_stop_requested["value"] or lock.consume_stop_request():
@@ -439,7 +513,6 @@ def run_import(args: argparse.Namespace) -> int:
                         log_event=log_event,
                         run_id=run_id,
                     )
-                    mirrored_outcomes.append(outcome)
                     summary.total_bytes += outcome.size_bytes
                     processed_mirror_bytes += outcome.size_bytes
                     summary.warning_count += outcome.warning_count
@@ -481,6 +554,12 @@ def run_import(args: argparse.Namespace) -> int:
                 for label, volume_root in seen_volumes.items():
                     if label in ejected_labels:
                         continue
+                    log_event(
+                        build_event_line(
+                            f"micSync scheduling post-mirror eject label={label}",
+                            kind="event",
+                        )
+                    )
                     if eject_volume(volume_root):
                         ejected_volumes.append(label)
                         ejected_labels.add(label)
@@ -496,7 +575,19 @@ def run_import(args: argparse.Namespace) -> int:
                 size_bytes
                 for _, _, _, _, size_bytes in derivation_queue
             )
+            if derivation_queue:
+                log_event(
+                    build_event_line(
+                        "micSync derive starting "
+                        f"candidates={len(derivation_queue)} "
+                        f"total={derivation_total_bytes / 1_000_000:.0f}MB",
+                        kind="event",
+                    )
+                )
+            else:
+                log_event(build_event_line("micSync derive no pending candidates", kind="event"))
             processed_normalize_bytes = 0
+            processed_derivations = 0
             for normalize_index, (
                 source_file_id,
                 raw_path,
@@ -540,6 +631,7 @@ def run_import(args: argparse.Namespace) -> int:
                                 path=str(derived_path.relative_to(config.recordings_root)),
                             )
                         )
+                    processed_derivations += 1
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
                     log_event(
@@ -549,6 +641,13 @@ def run_import(args: argparse.Namespace) -> int:
                             kind="fail",
                         )
                     )
+            if not summary.stopped:
+                log_event(
+                    build_event_line(
+                        f"micSync derive complete processed={processed_derivations}",
+                        kind="event",
+                    )
+                )
 
             if summary.stopped:
                 break
@@ -578,7 +677,7 @@ def run_import(args: argparse.Namespace) -> int:
         )
         if config.notify:
             if summary.stopped:
-                send_notification(
+                emit_notification(
                     title="micSync import stopped",
                     message=build_stopped_message(
                         mirrored_count=summary.mirrored_count,
@@ -590,7 +689,7 @@ def run_import(args: argparse.Namespace) -> int:
                     ),
                 )
             elif summary.failed_count == 0:
-                send_notification(
+                emit_notification(
                     title=(
                         "micSync import complete with warnings"
                         if summary.warning_count > 0
@@ -608,7 +707,7 @@ def run_import(args: argparse.Namespace) -> int:
                     ),
                 )
             else:
-                send_notification(
+                emit_notification(
                     title="micSync import incomplete",
                     message=build_incomplete_message(
                         mirrored_count=summary.mirrored_count,

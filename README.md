@@ -24,6 +24,7 @@ The current design assumes:
 - Prefilters exact duplicates before mirroring so queued-byte estimates and per-file mirror progress reflect only new copies
 - Immediately ejects a volume after scan when every detected file on that volume is already mirrored and auto-eject is enabled
 - Detects supported macOS/Linux/Windows trash paths and marks those recordings hidden in the catalog
+- Emits lifecycle logs for scan, duplicate preflight, derive, clipboard, notification, and eject planning in addition to per-file progress rows
 - Sends macOS notifications
 - Can auto-eject source volumes after a clean verified mirror stage
 - Can optionally create normalized browse copies under `derived/`

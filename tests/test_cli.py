@@ -1055,6 +1055,92 @@ class CliRunTest(unittest.TestCase):
         self.assertIn("no candidates detected", stdout.getvalue())
         self.assertIn("no candidates detected", log_contents)
 
+    def test_scan_logs_volume_start_and_finish_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            volume_one = tmp_path / "Volumes" / "MIC 01"
+            volume_two = tmp_path / "Volumes" / "MIC 02"
+            volume_one.mkdir(parents=True)
+            volume_two.mkdir(parents=True)
+            recordings_root = tmp_path / "recordings"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=False,
+                derived_outputs_strategy="clone_then_copy",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=False,
+                eject=False,
+            )
+
+            class IdleLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return False
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            def scan_side_effect(**kwargs):
+                kwargs["on_volume_start"](volume_one)
+                kwargs["on_volume_complete"](volume_one, 0)
+                kwargs["on_volume_start"](volume_two)
+                kwargs["on_volume_complete"](volume_two, 0)
+                return []
+
+            args = argparse.Namespace(
+                max_file_size_mb=None,
+                notify=None,
+                eject=None,
+                source_volume=[str(volume_one), str(volume_two)],
+                stop=False,
+                run_detached_child=False,
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=IdleLock()),
+                mock.patch("micsync.cli.scan_candidates", side_effect=scan_side_effect),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+                redirect_stdout(stdout),
+            ):
+                result = run_import(args)
+
+        self.assertEqual(result, 0)
+        output = stdout.getvalue()
+        self.assertIn("micSync scan started volumes=2", output)
+        self.assertIn("micSync scan volume started label=MIC 01", output)
+        self.assertIn("micSync scan volume complete label=MIC 01 candidates=0", output)
+        self.assertIn("micSync scan volume started label=MIC 02", output)
+        self.assertIn("micSync scan volume complete label=MIC 02 candidates=0", output)
+        self.assertIn("micSync scan complete candidates=0 volumes=2", output)
+        self.assertIn("micSync duplicate preflight started candidates=0", output)
+        self.assertIn("micSync duplicate preflight complete new=0 existing=0 duplicate_only_volumes=0", output)
+
     def test_eject_outcomes_are_logged(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -1155,6 +1241,125 @@ class CliRunTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("ejected volume MIC 1", stdout.getvalue())
         self.assertIn("ejected volume MIC 1", log_contents)
+
+    def test_logs_preflight_notification_derive_and_eject_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            recordings_root = tmp_path / "recordings"
+            volume = tmp_path / "Volumes" / "MIC 01"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=True,
+                derived_outputs_strategy="copy_only",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=True,
+                eject=True,
+            )
+            candidate = CandidateFile(
+                volume_label="MIC 01",
+                volume_root=volume,
+                source_path=volume / "A" / "TX01_MIC001_20260315_120000.wav",
+                source_parent_folder="A",
+                file_size_bytes=233_000_000,
+            )
+            mirrored = MirrorOutcome(
+                raw_path=recordings_root / "raw" / "MIC_01" / "A" / candidate.source_path.name,
+                checksum="abc123",
+                size_bytes=233_000_000,
+                status="mirrored",
+                source_file_id=1,
+                warning_count=0,
+            )
+
+            class OneRunLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return False
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            def scan_side_effect(**kwargs):
+                kwargs["on_volume_start"](volume)
+                kwargs["on_volume_complete"](volume, 1)
+                return [candidate]
+
+            args = argparse.Namespace(
+                max_file_size_mb=None,
+                derived=None,
+                notify=None,
+                eject=None,
+                source_volume=[str(volume)],
+                stop=False,
+                run_detached_child=False,
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=OneRunLock()),
+                mock.patch("micsync.cli.scan_candidates", side_effect=scan_side_effect),
+                mock.patch("micsync.cli.find_preexisting_raw_duplicate", return_value=None),
+                mock.patch(
+                    "micsync.cli._pending_derivation_queue",
+                    return_value=[(1, mirrored.raw_path, candidate.source_path.name, 0, 233_000_000)],
+                ),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+                mock.patch("micsync.cli.copy_to_clipboard", return_value=True),
+                mock.patch("micsync.cli.send_notification"),
+                mock.patch("micsync.cli.mirror_recording_to_raw", return_value=mirrored),
+                mock.patch(
+                    "micsync.cli.derive_mirrored_recording",
+                    return_value=mock.Mock(
+                        warning_count=0,
+                        size_bytes=233_000_000,
+                        derived_path=recordings_root
+                        / "derived"
+                        / "normalized"
+                        / "2026"
+                        / "03"
+                        / "15"
+                        / "20260315_120000_TX01_MIC001.wav",
+                    ),
+                ),
+                mock.patch("micsync.cli.eject_volume", return_value=True),
+                redirect_stdout(stdout),
+            ):
+                result = run_import(args)
+
+        self.assertEqual(result, 0)
+        output = stdout.getvalue()
+        self.assertIn("micSync duplicate preflight started candidates=1", output)
+        self.assertIn("micSync duplicate preflight complete new=1 existing=0 duplicate_only_volumes=0", output)
+        self.assertIn("micSync copied stop command to clipboard", output)
+        self.assertIn("micSync sent notification title=micSync mirror starting", output)
+        self.assertIn("micSync derive starting candidates=1 total=233MB", output)
+        self.assertIn("micSync derive complete processed=1", output)
+        self.assertIn("micSync scheduling post-mirror eject label=MIC 01", output)
 
     def test_duplicate_only_volumes_eject_before_mirror_loop(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

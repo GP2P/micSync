@@ -22,6 +22,7 @@ The current design assumes:
 - Handles duplicate Shortcut triggers and frozen processes with a singleton lock and rescan marker
 - Supports resumable runs and duplicate detection
 - Prefilters exact duplicates before mirroring so queued-byte estimates and per-file mirror progress reflect only new copies
+- Immediately ejects a volume after scan when every detected file on that volume is already mirrored and auto-eject is enabled
 - Detects supported macOS/Linux/Windows trash paths and marks those recordings hidden in the catalog
 - Sends macOS notifications
 - Can auto-eject source volumes after a clean verified mirror stage

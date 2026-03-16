@@ -365,6 +365,12 @@ def run_import(args: argparse.Namespace) -> int:
                     preexisting_duplicates.append((candidate, duplicate_raw_path))
                 else:
                     mirror_candidates.append(candidate)
+            duplicate_only_volumes: dict[str, Path] = {}
+            mirror_volume_labels = {candidate.volume_label for candidate in mirror_candidates}
+            for candidate, _ in preexisting_duplicates:
+                if candidate.volume_label in mirror_volume_labels:
+                    continue
+                duplicate_only_volumes[candidate.volume_label] = candidate.volume_root
             pending_candidates = mirror_candidates
             summary.duplicate_count += len(preexisting_duplicates)
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
@@ -397,6 +403,16 @@ def run_import(args: argparse.Namespace) -> int:
                         stop_hint=stop_hint,
                     ),
                 )
+            if summary.failed_count == 0 and config.eject and not summary.stopped:
+                for label, volume_root in duplicate_only_volumes.items():
+                    if label in ejected_labels:
+                        continue
+                    if eject_volume(volume_root):
+                        ejected_volumes.append(label)
+                        ejected_labels.add(label)
+                        log_event(build_event_line(f"micSync ejected volume {label}", kind="eject"))
+                    else:
+                        log_event(build_event_line(f"micSync failed to eject volume {label}", kind="fail"))
 
             any_processed = bool(preexisting_duplicates)
             mirrored_outcomes = []

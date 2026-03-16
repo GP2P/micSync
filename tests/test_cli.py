@@ -1156,6 +1156,127 @@ class CliRunTest(unittest.TestCase):
         self.assertIn("ejected volume MIC 1", stdout.getvalue())
         self.assertIn("ejected volume MIC 1", log_contents)
 
+    def test_duplicate_only_volumes_eject_before_mirror_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            recordings_root = tmp_path / "recordings"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=False,
+                derived_outputs_strategy="clone_then_copy",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=False,
+                eject=True,
+            )
+            duplicate_only_candidate = CandidateFile(
+                volume_label="MIC 1",
+                volume_root=tmp_path / "Volumes" / "MIC 1",
+                source_path=tmp_path / "Volumes" / "MIC 1" / "A" / "TX01_MIC001_20260315_120000.wav",
+                source_parent_folder="A",
+                file_size_bytes=128,
+            )
+            mixed_duplicate_candidate = CandidateFile(
+                volume_label="MIC 2",
+                volume_root=tmp_path / "Volumes" / "MIC 2",
+                source_path=tmp_path / "Volumes" / "MIC 2" / "A" / "TX01_MIC001_20260315_123000.wav",
+                source_parent_folder="A",
+                file_size_bytes=128,
+            )
+            mixed_new_candidate = CandidateFile(
+                volume_label="MIC 2",
+                volume_root=tmp_path / "Volumes" / "MIC 2",
+                source_path=tmp_path / "Volumes" / "MIC 2" / "A" / "TX01_MIC001_20260315_130000.wav",
+                source_parent_folder="A",
+                file_size_bytes=256,
+            )
+            mirrored = MirrorOutcome(
+                raw_path=recordings_root / "raw" / "MIC_02" / "A" / mixed_new_candidate.source_path.name,
+                checksum="abc123",
+                size_bytes=256,
+                status="mirrored",
+                source_file_id=1,
+                warning_count=0,
+            )
+
+            class OneRunLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return False
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            args = argparse.Namespace(
+                max_file_size_mb=None,
+                notify=None,
+                eject=None,
+                stop=False,
+                run_detached_child=False,
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=OneRunLock()),
+                mock.patch(
+                    "micsync.cli.scan_candidates",
+                    return_value=[
+                        duplicate_only_candidate,
+                        mixed_duplicate_candidate,
+                        mixed_new_candidate,
+                    ],
+                ),
+                mock.patch(
+                    "micsync.cli.find_preexisting_raw_duplicate",
+                    side_effect=[
+                        recordings_root / "raw" / "MIC_01" / "A" / duplicate_only_candidate.source_path.name,
+                        recordings_root / "raw" / "MIC_02" / "A" / mixed_duplicate_candidate.source_path.name,
+                        None,
+                    ],
+                ),
+                mock.patch("micsync.cli._pending_derivation_queue", return_value=[]),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+                mock.patch("micsync.cli.copy_to_clipboard", return_value=False),
+                mock.patch("micsync.cli.send_notification"),
+                mock.patch("micsync.cli.mirror_recording_to_raw", return_value=mirrored) as mirror_recording_to_raw,
+                mock.patch("micsync.cli.eject_volume", return_value=True) as eject_volume,
+                redirect_stdout(stdout),
+            ):
+                result = run_import(args)
+
+        self.assertEqual(result, 0)
+        mirror_recording_to_raw.assert_called_once()
+        self.assertEqual(
+            [call.args[0] for call in eject_volume.call_args_list],
+            [duplicate_only_candidate.volume_root, mixed_new_candidate.volume_root],
+        )
+        self.assertIn("ejected volume MIC 1", stdout.getvalue())
+        self.assertIn("ejected volume MIC 2", stdout.getvalue())
+
     def test_failed_derive_counts_mirror_and_derive_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

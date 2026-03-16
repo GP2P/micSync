@@ -50,3 +50,30 @@ class ImporterTest(unittest.TestCase):
             self.assertIsNotNone(row["first_seen_at"])
             self.assertIsNotNone(row["last_attempted_at"])
             self.assertIsNotNone(row["completed_at"])
+
+    def test_zero_byte_recording_is_flagged_with_warning_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_mount = root / "MIC 01"
+            source_dir = source_mount / "TX_MIC001_20260308_143058"
+            source_dir.mkdir(parents=True)
+            source_file = source_dir / "TX01_MIC029_20260312_175545_orig.wav"
+            source_file.write_bytes(b"")
+            catalog = Catalog(root / "recordings" / "db" / "recordings.sqlite3")
+
+            outcome = import_recording(
+                source_path=source_file,
+                source_mount_path=source_mount,
+                source_parent_folder=source_dir.name,
+                volume_label="MIC 01",
+                recordings_root=root / "recordings",
+                tmp_root=root / "recordings" / "tmp",
+                catalog=catalog,
+                log_path=root / "micSync" / "logs" / "runs.log",
+                run_id="run-124",
+            )
+
+            row = catalog.fetch_recording_file(outcome.file_id)
+            self.assertEqual(outcome.warning_count, 1)
+            self.assertEqual(row["error_phase"], "source_validation")
+            self.assertIn("zero-byte", row["error_detail"])

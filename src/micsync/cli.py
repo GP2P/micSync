@@ -26,6 +26,7 @@ class RunSummary:
     imported_count: int = 0
     duplicate_count: int = 0
     failed_count: int = 0
+    warning_count: int = 0
     total_bytes: int = 0
 
 
@@ -114,6 +115,7 @@ def run_import(args: argparse.Namespace) -> int:
                         audio_subdir=args.dest_subdir,
                     )
                     summary.total_bytes += outcome.size_bytes
+                    summary.warning_count += outcome.warning_count
                     if outcome.status == "duplicate":
                         summary.duplicate_count += 1
                     else:
@@ -139,11 +141,16 @@ def run_import(args: argparse.Namespace) -> int:
         if config.notify:
             if summary.failed_count == 0:
                 send_notification(
-                    title="micSync import complete",
+                    title=(
+                        "micSync import complete with warnings"
+                        if summary.warning_count > 0
+                        else "micSync import complete"
+                    ),
                     message=build_completion_message(
                         imported_count=summary.imported_count,
                         duplicate_count=summary.duplicate_count,
                         failed_count=summary.failed_count,
+                        warning_count=summary.warning_count,
                         total_bytes=summary.total_bytes,
                         elapsed_seconds=elapsed_seconds,
                         ejected_volumes=ejected_volumes,
@@ -156,6 +163,7 @@ def run_import(args: argparse.Namespace) -> int:
                         imported_count=summary.imported_count,
                         duplicate_count=summary.duplicate_count,
                         failed_count=summary.failed_count,
+                        warning_count=summary.warning_count,
                         total_bytes=summary.total_bytes,
                         elapsed_seconds=elapsed_seconds,
                     ),

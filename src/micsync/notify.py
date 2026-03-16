@@ -24,6 +24,7 @@ def build_completion_message(
     imported_count: int,
     duplicate_count: int,
     failed_count: int,
+    warning_count: int,
     total_bytes: int,
     elapsed_seconds: int,
     ejected_volumes: list[str],
@@ -32,6 +33,7 @@ def build_completion_message(
         f"{imported_count} imported",
         f"{duplicate_count} duplicate",
         f"{failed_count} failed",
+        f"{warning_count} warning",
         _format_bytes(total_bytes),
         f"{elapsed_seconds}s",
     ]
@@ -45,12 +47,14 @@ def build_incomplete_message(
     imported_count: int,
     duplicate_count: int,
     failed_count: int,
+    warning_count: int,
     total_bytes: int,
     elapsed_seconds: int,
 ) -> str:
     return (
         f"incomplete | {imported_count} imported | {duplicate_count} duplicate | "
-        f"{failed_count} failed | {_format_bytes(total_bytes)} | {elapsed_seconds}s"
+        f"{failed_count} failed | {warning_count} warning | "
+        f"{_format_bytes(total_bytes)} | {elapsed_seconds}s"
     )
 
 

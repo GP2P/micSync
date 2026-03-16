@@ -85,8 +85,9 @@ class Catalog:
                     recording_end_at,
                     tx_slot,
                     mic_sequence,
-                    physical_mic_id
-                ) values (?, ?, ?, ?, ?, ?)
+                    physical_mic_id,
+                    first_imported_at
+                ) values (?, ?, ?, ?, ?, ?, datetime('now'))
                 on conflict(recording_group_key) do update set
                     recording_start_at=excluded.recording_start_at,
                     recording_end_at=coalesce(excluded.recording_end_at, recordings.recording_end_at),
@@ -111,6 +112,16 @@ class Catalog:
             if row is None:
                 raise RuntimeError("recording upsert failed")
             return int(row["id"])
+
+    def fetch_recording(self, recording_id: int) -> sqlite3.Row:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from recordings where id = ?",
+                (recording_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(recording_id)
+            return row
 
     def insert_recording_file(self, **fields: Any) -> int:
         columns = ", ".join(fields.keys())

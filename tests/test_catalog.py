@@ -27,6 +27,8 @@ class CatalogTest(unittest.TestCase):
                 physical_mic_id=2,
             )
             self.assertEqual(recording_id_1, recording_id_2)
+            row = catalog.fetch_recording(recording_id_1)
+            self.assertIsNotNone(row["first_imported_at"])
 
     def test_recording_file_rows_preserve_group_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -21,6 +21,7 @@ class ImportOutcome:
     status: str
     recording_id: int
     file_id: int
+    warning_count: int
 
 
 def compute_file_checksum(path: Path) -> str:
@@ -92,6 +93,11 @@ def import_recording(
     duration_ms = read_duration_ms(source_path)
     recording_end_at = derive_end_time(recording_start_at, duration_ms)
     physical_mic_id = parse_physical_mic_id(volume_label)
+    warning_messages: list[str] = []
+    if source_path.stat().st_size == 0:
+        warning_messages.append(
+            "zero-byte source file; recording may be incomplete and end time unavailable"
+        )
     recording_id = catalog.upsert_recording(
         recording_group_key=parsed.recording_group_key,
         recording_start_at=recording_start_at,
@@ -149,7 +155,11 @@ def import_recording(
         first_seen_at=attempted_at,
         last_attempted_at=attempted_at,
         completed_at=attempted_at,
+        error_phase="source_validation" if warning_messages else None,
+        error_detail="; ".join(warning_messages) if warning_messages else None,
     )
+    for warning_message in warning_messages:
+        append_run_log(log_path, f"warning {source_path.name}: {warning_message}")
     append_run_log(log_path, f"{status} {source_path.name} -> {final_path}")
     return ImportOutcome(
         final_path=final_path,
@@ -158,4 +168,5 @@ def import_recording(
         status=status,
         recording_id=recording_id,
         file_id=file_id,
+        warning_count=len(warning_messages),
     )

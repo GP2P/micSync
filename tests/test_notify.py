@@ -9,10 +9,12 @@ class NotifyTest(unittest.TestCase):
             imported_count=3,
             duplicate_count=1,
             failed_count=0,
+            warning_count=2,
             total_bytes=1024,
             elapsed_seconds=12,
             ejected_volumes=["MIC 01", "MIC 02"],
         )
         self.assertIn("3 imported", message)
         self.assertIn("1 duplicate", message)
+        self.assertIn("2 warning", message)
         self.assertIn("12s", message)

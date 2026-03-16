@@ -82,6 +82,7 @@ def run_import(args: argparse.Namespace) -> int:
             candidates = scan_candidates(
                 allow_extensions=set(config.extension_allowlist),
                 max_file_size_mb=config.max_file_size_mb,
+                exclude_volume_labels={"Macintosh HD"},
             )
             pending_candidates = [c for c in candidates if c.volume_root.name not in {"Macintosh HD"}]
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)

@@ -15,7 +15,7 @@ from micsync.config import apply_runtime_overrides, build_config, load_env_file
 from micsync.eject import eject_volume
 from micsync.importer import derive_mirrored_recording, mirror_recording_to_raw
 from micsync.lock import LockManager
-from micsync.logging_utils import append_run_log
+from micsync.logging_utils import append_run_log, build_run_logger
 from micsync.notify import (
     build_completion_message,
     build_incomplete_message,
@@ -82,10 +82,6 @@ def _data_root(config) -> Path:
     return Path(os.environ.get("NEXUS_DATA_ROOT", str(config.runtime_root.parent)))
 
 
-def _emit_progress(message: str) -> None:
-    print(message, flush=True)
-
-
 def _detached_child_argv(argv: list[str]) -> list[str]:
     child_args = [arg for arg in argv if arg != "--detach"]
     child_args.append("--run-detached-child")
@@ -111,6 +107,10 @@ def run_import(args: argparse.Namespace) -> int:
     config = _load_config(args)
     run_root = config.runtime_root / "run"
     log_path = config.runtime_root / "logs" / "runs.log"
+    log_event = build_run_logger(
+        log_path=log_path,
+        echo_to_stdout=not getattr(args, "run_detached_child", False),
+    )
     lock = LockManager(run_root, stale_timeout_seconds=config.stale_lock_timeout_seconds)
     stop_command = build_stop_command(
         service_root=_service_root(),
@@ -118,6 +118,12 @@ def run_import(args: argparse.Namespace) -> int:
     )
     if args.stop:
         stop_requested = lock.request_stop()
+        append_run_log(
+            log_path,
+            "micSync stop requested"
+            if stop_requested
+            else "micSync stop ignored; no active import is running",
+        )
         if config.notify:
             if stop_requested:
                 send_notification(
@@ -137,6 +143,10 @@ def run_import(args: argparse.Namespace) -> int:
         return 0
     acquired = lock.acquire_or_request_rescan()
     if not acquired.acquired:
+        log_event(
+            "micSync lock busy requested_rescan="
+            f"{str(acquired.requested_rescan).lower()}"
+        )
         return 0
 
     run_started = datetime.now(timezone.utc)
@@ -157,12 +167,20 @@ def run_import(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGINT, _request_graceful_stop)
     signal.signal(signal.SIGTERM, _request_graceful_stop)
     try:
+        log_event(
+            "micSync run started "
+            f"run_id={run_id} "
+            f"detached={str(getattr(args, 'run_detached_child', False)).lower()}"
+        )
+        if acquired.recovered_stale_lock:
+            log_event("micSync recovered stale lock")
         while True:
             if signal_stop_requested["value"] or lock.consume_stop_request():
                 summary.stopped = True
+                log_event("micSync stop requested before scan")
                 break
             lock.refresh("scanning")
-            _emit_progress("micSync scanning mounted volumes")
+            log_event("micSync scanning mounted volumes")
             candidates = scan_candidates(
                 allow_extensions=set(config.extension_allowlist),
                 max_file_size_mb=config.max_file_size_mb,
@@ -178,10 +196,12 @@ def run_import(args: argparse.Namespace) -> int:
             )
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
             if pending_candidates:
-                _emit_progress(
+                log_event(
                     "micSync mirror starting "
                     f"candidates={len(pending_candidates)} bytes={pending_bytes}"
                 )
+            else:
+                log_event("micSync no candidates detected")
             if config.notify and pending_candidates:
                 stop_hint = (
                     "copied exact stop command to clipboard"
@@ -202,10 +222,11 @@ def run_import(args: argparse.Namespace) -> int:
             for candidate in pending_candidates:
                 if signal_stop_requested["value"] or lock.consume_stop_request():
                     summary.stopped = True
+                    log_event("micSync stop requested during mirror stage")
                     break
                 any_processed = True
                 seen_volumes[candidate.volume_label] = candidate.volume_root
-                _emit_progress(f"micSync mirroring {candidate.source_path.name}")
+                log_event(f"micSync mirroring {candidate.source_path.name}")
                 lock.refresh(f"mirroring {candidate.source_path.name}")
                 try:
                     outcome = mirror_recording_to_raw(
@@ -217,6 +238,7 @@ def run_import(args: argparse.Namespace) -> int:
                         tmp_root=config.recordings_tmp_root,
                         catalog=catalog,
                         log_path=log_path,
+                        log_event=log_event,
                         run_id=run_id,
                     )
                     mirrored_outcomes.append(outcome)
@@ -228,14 +250,13 @@ def run_import(args: argparse.Namespace) -> int:
                         summary.mirrored_count += 1
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
-                    log_path.parent.mkdir(parents=True, exist_ok=True)
-                    with log_path.open("a", encoding="utf-8") as handle:
-                        handle.write(f"{datetime.now(timezone.utc).isoformat()} failed {candidate.source_path} {exc}\n")
+                    log_event(
+                        "micSync failed "
+                        f"phase=mirror path={candidate.source_path} error={exc}"
+                    )
 
             if summary.stopped:
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                with log_path.open("a", encoding="utf-8") as handle:
-                    handle.write(f"{datetime.now(timezone.utc).isoformat()} stopped after mirror phase request\n")
+                log_event("micSync stopped after mirror phase request")
             if summary.failed_count == 0 and config.eject and not summary.stopped:
                 for label, volume_root in seen_volumes.items():
                     if label in ejected_labels:
@@ -243,12 +264,16 @@ def run_import(args: argparse.Namespace) -> int:
                     if eject_volume(volume_root):
                         ejected_volumes.append(label)
                         ejected_labels.add(label)
+                        log_event(f"micSync ejected volume {label}")
+                    else:
+                        log_event(f"micSync failed to eject volume {label}")
 
             for mirrored in mirrored_outcomes:
                 if signal_stop_requested["value"] or lock.consume_stop_request():
                     summary.stopped = True
+                    log_event("micSync stop requested during derive stage")
                     break
-                _emit_progress(f"micSync deriving {mirrored.raw_path.name}")
+                log_event(f"micSync deriving {mirrored.raw_path.name}")
                 lock.refresh(f"deriving {mirrored.raw_path.name}")
                 try:
                     derived = derive_mirrored_recording(
@@ -256,6 +281,7 @@ def run_import(args: argparse.Namespace) -> int:
                         source_file_id=mirrored.source_file_id,
                         catalog=catalog,
                         log_path=log_path,
+                        log_event=log_event,
                         enable_derived_outputs=config.enable_derived_outputs,
                         derived_root=config.recordings_derived_root,
                         derived_outputs_strategy=config.derived_outputs_strategy,
@@ -266,20 +292,25 @@ def run_import(args: argparse.Namespace) -> int:
                     summary.warning_count += max(0, derived.warning_count - mirrored.warning_count)
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
-                    log_path.parent.mkdir(parents=True, exist_ok=True)
-                    with log_path.open("a", encoding="utf-8") as handle:
-                        handle.write(f"{datetime.now(timezone.utc).isoformat()} failed {mirrored.raw_path} {exc}\n")
+                    log_event(
+                        "micSync failed "
+                        f"phase=derive path={mirrored.raw_path} error={exc}"
+                    )
 
             if summary.stopped:
                 break
-            if not any_processed and not lock.consume_rescan_request():
+            rescan_requested = lock.consume_rescan_request()
+            if rescan_requested:
+                log_event("micSync rescan requested; continuing")
+                continue
+            if any_processed:
+                log_event("micSync run cycle complete; no rescan requested")
                 break
-            if not lock.consume_rescan_request():
-                break
+            log_event("micSync no work processed; exiting")
+            break
 
         elapsed_seconds = int((datetime.now(timezone.utc) - run_started).total_seconds())
-        append_run_log(
-            log_path,
+        log_event(
             "summary "
             f"mirrored={summary.mirrored_count} "
             f"derived={summary.derived_count} "
@@ -288,16 +319,6 @@ def run_import(args: argparse.Namespace) -> int:
             f"warning={summary.warning_count} "
             f"bytes={summary.total_bytes} "
             f"elapsed_seconds={elapsed_seconds}",
-        )
-        _emit_progress(
-            "micSync summary "
-            f"mirrored={summary.mirrored_count} "
-            f"derived={summary.derived_count} "
-            f"duplicate={summary.duplicate_count} "
-            f"failed={summary.failed_count} "
-            f"warning={summary.warning_count} "
-            f"bytes={summary.total_bytes} "
-            f"elapsed_seconds={elapsed_seconds}"
         )
         if config.notify:
             if summary.stopped:

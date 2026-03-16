@@ -15,7 +15,7 @@ from micsync.audio import (
     read_duration_ms,
 )
 from micsync.catalog import Catalog
-from micsync.logging_utils import append_run_log
+from micsync.logging_utils import RunLogger, append_run_log
 from micsync.parser import ParsedRecordingName, parse_physical_mic_id, parse_recording_name
 
 
@@ -139,8 +139,10 @@ def mirror_recording_to_raw(
     tmp_root: Path,
     catalog: Catalog,
     log_path: Path,
+    log_event: RunLogger | None = None,
     run_id: str | None = None,
 ) -> MirrorOutcome:
+    emit = log_event or (lambda message: append_run_log(log_path, message))
     parsed: ParsedRecordingName = parse_recording_name(source_path.name)
     recording_start_at = parsed.start_at.isoformat(timespec="seconds")
     duration_ms = read_duration_ms(source_path)
@@ -199,8 +201,8 @@ def mirror_recording_to_raw(
         error_detail="; ".join(warning_messages) if warning_messages else None,
     )
     for warning_message in warning_messages:
-        append_run_log(log_path, f"warning {source_path.name}: {warning_message}")
-    append_run_log(log_path, f"{status} {source_path.name} -> {raw_path}")
+        emit(f"micSync warning {source_path.name}: {warning_message}")
+    emit(f"micSync {status} {source_path.name} -> {raw_path}")
     return MirrorOutcome(
         raw_path=raw_path,
         checksum=checksum,
@@ -217,12 +219,14 @@ def derive_mirrored_recording(
     source_file_id: int,
     catalog: Catalog,
     log_path: Path,
+    log_event: RunLogger | None = None,
     enable_derived_outputs: bool = False,
     derived_root: Path | None = None,
     derived_outputs_strategy: str = "clone_then_copy",
     segment_cadence_seconds: int = 1800,
     segment_group_tolerance_ms: int = 1000,
 ) -> ImportOutcome:
+    emit = log_event or (lambda message: append_run_log(log_path, message))
     source_file = catalog.fetch_source_file(source_file_id)
     parsed: ParsedRecordingName = parse_recording_name(str(source_file["source_filename"]))
     segment_key = parsed.recording_group_key
@@ -290,7 +294,8 @@ def derive_mirrored_recording(
             dest_path=derived_root / _derived_relative_path(parsed),
             strategy=derived_outputs_strategy,
         )
-    append_run_log(log_path, f"derived {raw_path.name} -> take {take_id} segment {segment_id}")
+        emit(f"micSync materialized derived {raw_path.name} -> {derived_path}")
+    emit(f"micSync derived {raw_path.name} -> take {take_id} segment {segment_id}")
     return ImportOutcome(
         raw_path=raw_path,
         derived_path=derived_path,
@@ -314,6 +319,7 @@ def import_recording(
     tmp_root: Path,
     catalog: Catalog,
     log_path: Path,
+    log_event: RunLogger | None = None,
     run_id: str,
     segment_cadence_seconds: int = 1800,
     segment_group_tolerance_ms: int = 1000,
@@ -327,6 +333,7 @@ def import_recording(
         tmp_root=tmp_root,
         catalog=catalog,
         log_path=log_path,
+        log_event=log_event,
         run_id=run_id,
     )
     return derive_mirrored_recording(
@@ -334,6 +341,7 @@ def import_recording(
         source_file_id=mirrored.source_file_id,
         catalog=catalog,
         log_path=log_path,
+        log_event=log_event,
         enable_derived_outputs=False,
         derived_root=None,
         derived_outputs_strategy="clone_then_copy",

@@ -12,7 +12,7 @@ from unittest import mock
 from pathlib import Path
 
 from micsync.catalog import Catalog
-from micsync.cli import build_parser, run_import
+from micsync.cli import _recordings_root_supports_clone, build_parser, run_import
 from micsync.config import Config
 from micsync.importer import MirrorOutcome
 from micsync.lock import LockAcquireResult
@@ -23,6 +23,39 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliSmokeTest(unittest.TestCase):
+    def test_clone_support_probe_uses_mount_point_for_subdirectory(self) -> None:
+        df_output = (
+            "Filesystem 512-blocks Used Available Capacity iused ifree %iused Mounted on\n"
+            "/dev/disk3s5 1942638920 1729896024 133400344 93% 5663466 667001720 1% /System/Volumes/Data\n"
+        )
+        diskutil_output = b"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+    <key>FilesystemType</key>
+    <string>apfs</string>
+</dict>
+</plist>
+"""
+
+        with mock.patch("micsync.cli.subprocess.run") as run_mock:
+            run_mock.side_effect = [
+                mock.Mock(returncode=0, stdout=df_output, stderr=""),
+                mock.Mock(returncode=0, stdout=diskutil_output, stderr=b""),
+            ]
+
+            supported, reason = _recordings_root_supports_clone(
+                Path("~/nexus-data/recordings/audio")
+            )
+
+        self.assertTrue(supported)
+        self.assertIsNone(reason)
+        self.assertEqual(run_mock.call_args_list[0].args[0], ["df", "-P", "~/nexus-data/recordings/audio"])
+        self.assertEqual(
+            run_mock.call_args_list[1].args[0],
+            ["diskutil", "info", "-plist", "/System/Volumes/Data"],
+        )
+
     def test_build_parser_accepts_repeatable_source_volumes_and_derived_toggle(self) -> None:
         args = build_parser().parse_args(
             [

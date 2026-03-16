@@ -129,11 +129,34 @@ def _nearest_existing_path(path: Path) -> Path:
     return probe
 
 
-def _recordings_root_supports_clone(path: Path) -> tuple[bool, str | None]:
+def _mount_point_for_path(path: Path) -> tuple[Path | None, str | None]:
     probe = _nearest_existing_path(path)
+    result = subprocess.run(
+        ["df", "-P", str(probe)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None, f"df failed for {probe}"
+
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None, f"df returned no mount point for {probe}"
+
+    fields = lines[-1].split()
+    if len(fields) < 6:
+        return None, f"df returned malformed output for {probe}"
+    return Path(fields[-1]), None
+
+
+def _recordings_root_supports_clone(path: Path) -> tuple[bool, str | None]:
+    mount_point, mount_error = _mount_point_for_path(path)
+    if mount_point is None:
+        return False, mount_error
     try:
         result = subprocess.run(
-            ["diskutil", "info", "-plist", str(probe)],
+            ["diskutil", "info", "-plist", str(mount_point)],
             capture_output=True,
             check=False,
         )
@@ -141,19 +164,19 @@ def _recordings_root_supports_clone(path: Path) -> tuple[bool, str | None]:
         return False, "diskutil is unavailable"
 
     if result.returncode != 0:
-        return False, f"diskutil info failed for {probe}"
+        return False, f"diskutil info failed for {mount_point}"
 
     try:
         info = plistlib.loads(result.stdout)
     except Exception:
-        return False, f"diskutil info returned unreadable data for {probe}"
+        return False, f"diskutil info returned unreadable data for {mount_point}"
 
     filesystem_type = str(info.get("FilesystemType") or "").strip()
     if filesystem_type.lower() == "apfs":
         return True, None
     if filesystem_type:
-        return False, f"{probe} uses {filesystem_type}, not APFS"
-    return False, f"filesystem type is unknown for {probe}"
+        return False, f"{mount_point} uses {filesystem_type}, not APFS"
+    return False, f"filesystem type is unknown for {mount_point}"
 
 
 def _preflight_derived_outputs(config) -> tuple[bool, str | None]:

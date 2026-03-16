@@ -19,8 +19,9 @@ class ImportOutcome:
     checksum: str
     size_bytes: int
     status: str
-    recording_id: int
-    file_id: int
+    take_id: int
+    segment_id: int
+    artifact_id: int
     warning_count: int
 
 
@@ -61,6 +62,12 @@ def _recordings_relative_dir(start_at: datetime) -> Path:
     return Path("audio") / start_at.strftime("%Y") / start_at.strftime("%m") / start_at.strftime("%d")
 
 
+def _derive_take_key(*, segment_key: str) -> str:
+    # Conservative v1 grouping: each segment starts as its own take until
+    # continuity-linking heuristics across multiple 30-minute chunks are added.
+    return segment_key
+
+
 def _copy_with_checksum(source_path: Path, tmp_path: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
     size_bytes = 0
@@ -89,6 +96,8 @@ def import_recording(
     audio_subdir: str | None = None,
 ) -> ImportOutcome:
     parsed: ParsedRecordingName = parse_recording_name(source_path.name)
+    segment_key = parsed.recording_group_key
+    take_key = _derive_take_key(segment_key=segment_key)
     recording_start_at = parsed.start_at.isoformat(timespec="seconds")
     duration_ms = read_duration_ms(source_path)
     recording_end_at = derive_end_time(recording_start_at, duration_ms)
@@ -98,18 +107,36 @@ def import_recording(
         warning_messages.append(
             "zero-byte source file; recording may be incomplete and end time unavailable"
         )
-    recording_id = catalog.upsert_recording(
-        recording_group_key=parsed.recording_group_key,
-        recording_start_at=recording_start_at,
-        recording_end_at=recording_end_at,
+    take_id = catalog.upsert_take(
+        take_key=take_key,
+        take_start_at=recording_start_at,
+        take_end_at=recording_end_at,
+        tx_slot=parsed.tx_slot,
+        physical_mic_id=physical_mic_id,
+        source_parent_folder=source_parent_folder,
+        health_status="warning" if warning_messages else "ok",
+    )
+    attempted_at = datetime.now().isoformat(timespec="seconds")
+    segment_id = catalog.upsert_segment(
+        take_id=take_id,
+        segment_key=segment_key,
+        segment_start_at=recording_start_at,
+        segment_end_at=recording_end_at,
         tx_slot=parsed.tx_slot,
         mic_sequence=parsed.mic_sequence,
         physical_mic_id=physical_mic_id,
+        source_parent_folder=source_parent_folder,
+        duration_ms=duration_ms,
+        first_seen_at=attempted_at,
+        last_attempted_at=attempted_at,
+        completed_at=attempted_at,
+        health_status="warning" if warning_messages else "ok",
+        anomaly_code="zero_byte_source" if warning_messages else None,
+        anomaly_detail="; ".join(warning_messages) if warning_messages else None,
     )
 
-    tmp_path = tmp_root / f"{parsed.recording_group_key}{source_path.suffix}.tmp"
+    tmp_path = tmp_root / f"{segment_key}{source_path.suffix}.tmp"
     checksum, size_bytes = _copy_with_checksum(source_path, tmp_path)
-    attempted_at = datetime.now().isoformat(timespec="seconds")
     relative_dir = _recordings_relative_dir(parsed.start_at)
     if audio_subdir:
         relative_dir = Path("audio") / audio_subdir / relative_dir.relative_to("audio")
@@ -129,9 +156,10 @@ def import_recording(
         final_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path.replace(final_path)
 
-    file_id = catalog.insert_recording_file(
-        recording_id=recording_id,
-        recording_group_key=parsed.recording_group_key,
+    artifact_id = catalog.insert_artifact(
+        take_id=take_id,
+        segment_id=segment_id,
+        segment_key=segment_key,
         run_id=run_id,
         source_volume_label=volume_label,
         source_volume_identifier=volume_label,
@@ -141,10 +169,8 @@ def import_recording(
         source_relative_path=str(Path(source_parent_folder) / source_path.name),
         source_size_bytes=size_bytes,
         source_checksum=checksum,
-        recording_start_at=recording_start_at,
-        recording_end_at=recording_end_at,
-        tx_slot=parsed.tx_slot,
-        mic_sequence=parsed.mic_sequence,
+        artifact_start_at=recording_start_at,
+        artifact_end_at=recording_end_at,
         variant=parsed.variant,
         content_role=parsed.variant,
         duration_ms=duration_ms,
@@ -166,7 +192,8 @@ def import_recording(
         checksum=checksum,
         size_bytes=size_bytes,
         status=status,
-        recording_id=recording_id,
-        file_id=file_id,
+        take_id=take_id,
+        segment_id=segment_id,
+        artifact_id=artifact_id,
         warning_count=len(warning_messages),
     )

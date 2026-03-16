@@ -5,6 +5,7 @@ from datetime import datetime
 import hashlib
 import os
 from pathlib import Path
+import re
 from typing import Callable
 
 from micsync.audio import derive_end_time, read_duration_ms
@@ -15,13 +16,13 @@ from micsync.parser import ParsedRecordingName, parse_physical_mic_id, parse_rec
 
 @dataclass(frozen=True)
 class ImportOutcome:
-    final_path: Path
+    raw_path: Path
     checksum: str
     size_bytes: int
     status: str
     take_id: int
     segment_id: int
-    artifact_id: int
+    source_file_id: int
     warning_count: int
 
 
@@ -60,6 +61,16 @@ def plan_destination_path(
 
 def _recordings_relative_dir(start_at: datetime) -> Path:
     return Path("audio") / start_at.strftime("%Y") / start_at.strftime("%m") / start_at.strftime("%d")
+
+
+def _raw_source_dir_name(volume_label: str | None, physical_mic_id: int) -> str:
+    if physical_mic_id > 0:
+        return f"MIC_{physical_mic_id:02d}"
+    if volume_label:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", volume_label.strip()).strip("_")
+        if normalized:
+            return normalized
+    return "UNKNOWN"
 
 
 def _should_group_with_previous(
@@ -117,11 +128,31 @@ def import_recording(
     duration_ms = read_duration_ms(source_path)
     recording_end_at = derive_end_time(recording_start_at, duration_ms)
     physical_mic_id = parse_physical_mic_id(volume_label)
+    source_dir_name = _raw_source_dir_name(volume_label, physical_mic_id)
     warning_messages: list[str] = []
     if source_path.stat().st_size == 0:
         warning_messages.append(
             "zero-byte source file; recording may be incomplete and end time unavailable"
         )
+
+    tmp_path = tmp_root / source_dir_name / source_parent_folder / f"{source_path.name}.tmp"
+    checksum, size_bytes = _copy_with_checksum(source_path, tmp_path)
+    raw_relative_dir = Path("raw") / source_dir_name / source_parent_folder
+    raw_path = plan_destination_path(
+        recordings_root=recordings_root,
+        relative_dir=raw_relative_dir,
+        dest_name=source_path.name,
+        incoming_checksum=checksum,
+        existing_checksum_lookup=compute_file_checksum,
+    )
+
+    status = "mirrored"
+    if raw_path.exists():
+        status = "duplicate"
+        tmp_path.unlink(missing_ok=True)
+    else:
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.replace(raw_path)
 
     previous_segment = catalog.find_latest_segment_for_session(
         tx_slot=parsed.tx_slot,
@@ -170,66 +201,40 @@ def import_recording(
         anomaly_code="zero_byte_source" if warning_messages else None,
         anomaly_detail="; ".join(warning_messages) if warning_messages else None,
     )
-
-    tmp_path = tmp_root / f"{segment_key}{source_path.suffix}.tmp"
-    checksum, size_bytes = _copy_with_checksum(source_path, tmp_path)
-    relative_dir = _recordings_relative_dir(parsed.start_at)
-    if audio_subdir:
-        relative_dir = Path("audio") / audio_subdir / relative_dir.relative_to("audio")
-    final_path = plan_destination_path(
-        recordings_root=recordings_root,
-        relative_dir=relative_dir,
-        dest_name=parsed.dest_name,
-        incoming_checksum=checksum,
-        existing_checksum_lookup=compute_file_checksum,
-    )
-
-    status = "imported"
-    if final_path.exists():
-        status = "duplicate"
-        tmp_path.unlink(missing_ok=True)
-    else:
-        final_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path.replace(final_path)
-
-    artifact_id = catalog.insert_artifact(
-        take_id=take_id,
+    source_file_id = catalog.upsert_source_file(
+        source_key=str(raw_path.relative_to(recordings_root)),
         segment_id=segment_id,
-        segment_key=segment_key,
-        run_id=run_id,
         source_volume_label=volume_label,
         source_volume_identifier=volume_label,
         source_mount_path=str(source_mount_path),
         source_parent_folder=source_parent_folder,
         source_filename=source_path.name,
         source_relative_path=str(Path(source_parent_folder) / source_path.name),
+        physical_mic_id=physical_mic_id,
+        raw_relative_path=str(raw_path.relative_to(recordings_root)),
         source_size_bytes=size_bytes,
         source_checksum=checksum,
-        artifact_start_at=recording_start_at,
-        artifact_end_at=recording_end_at,
-        variant=parsed.variant,
-        content_role=parsed.variant,
+        recording_start_at=recording_start_at,
+        recording_end_at=recording_end_at,
         duration_ms=duration_ms,
-        physical_mic_id=physical_mic_id,
-        dest_relative_path=str(final_path.relative_to(recordings_root)),
-        dest_size_bytes=size_bytes,
-        import_status=status,
+        variant=parsed.variant,
+        mirror_status=status,
         first_seen_at=attempted_at,
         last_attempted_at=attempted_at,
-        completed_at=attempted_at,
+        mirrored_at=attempted_at,
         error_phase="source_validation" if warning_messages else None,
         error_detail="; ".join(warning_messages) if warning_messages else None,
     )
     for warning_message in warning_messages:
         append_run_log(log_path, f"warning {source_path.name}: {warning_message}")
-    append_run_log(log_path, f"{status} {source_path.name} -> {final_path}")
+    append_run_log(log_path, f"{status} {source_path.name} -> {raw_path}")
     return ImportOutcome(
-        final_path=final_path,
+        raw_path=raw_path,
         checksum=checksum,
         size_bytes=size_bytes,
         status=status,
         take_id=take_id,
         segment_id=segment_id,
-        artifact_id=artifact_id,
+        source_file_id=source_file_id,
         warning_count=len(warning_messages),
     )

@@ -129,6 +129,16 @@ def _copy_with_checksum(source_path: Path, tmp_path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size_bytes
 
 
+def _measure_file_with_checksum(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size_bytes += len(chunk)
+            digest.update(chunk)
+    return digest.hexdigest(), size_bytes
+
+
 def mirror_recording_to_raw(
     *,
     source_path: Path,
@@ -156,22 +166,35 @@ def mirror_recording_to_raw(
         )
 
     tmp_path = tmp_root / source_dir_name / source_parent_folder / f"{source_path.name}.tmp"
-    checksum, size_bytes = _copy_with_checksum(source_path, tmp_path)
     raw_relative_dir = Path("raw") / source_dir_name / source_parent_folder
-    raw_path = plan_destination_path(
-        recordings_root=recordings_root,
-        relative_dir=raw_relative_dir,
-        dest_name=source_path.name,
-        incoming_checksum=checksum,
-        existing_checksum_lookup=compute_file_checksum,
-    )
+    canonical_raw_path = recordings_root / raw_relative_dir / source_path.name
 
     status = "mirrored"
+    if canonical_raw_path.exists():
+        checksum, size_bytes = _measure_file_with_checksum(source_path)
+        raw_path = plan_destination_path(
+            recordings_root=recordings_root,
+            relative_dir=raw_relative_dir,
+            dest_name=source_path.name,
+            incoming_checksum=checksum,
+            existing_checksum_lookup=compute_file_checksum,
+        )
+    else:
+        checksum, size_bytes = _copy_with_checksum(source_path, tmp_path)
+        raw_path = canonical_raw_path
+
     if raw_path.exists():
         status = "duplicate"
         tmp_path.unlink(missing_ok=True)
     else:
         raw_path.parent.mkdir(parents=True, exist_ok=True)
+        if not tmp_path.exists():
+            tmp_path.parent.mkdir(parents=True, exist_ok=True)
+            with source_path.open("rb") as src, tmp_path.open("wb") as dst:
+                for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                    dst.write(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
         tmp_path.replace(raw_path)
         preserve_file_timestamps(source_path=source_path, dest_path=raw_path)
 

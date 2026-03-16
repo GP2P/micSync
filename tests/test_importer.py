@@ -149,6 +149,44 @@ class ImporterTest(unittest.TestCase):
             self.assertIsNone(source_file_row["segment_id"])
             self.assertEqual(source_file_row["variant"], "orig")
 
+    def test_mirror_recording_to_raw_skips_copy_when_exact_duplicate_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_mount = root / "MIC 01"
+            source_dir = source_mount / "TX_MIC001_20260308_143058"
+            source_dir.mkdir(parents=True)
+            source_file = source_dir / "TX02_MIC001_20260608_112048_orig.wav"
+            source_bytes = b"same-audio"
+            source_file.write_bytes(source_bytes)
+            existing_raw = (
+                root
+                / "recordings"
+                / "audio"
+                / "raw"
+                / "MIC_01"
+                / source_dir.name
+                / source_file.name
+            )
+            existing_raw.parent.mkdir(parents=True, exist_ok=True)
+            existing_raw.write_bytes(source_bytes)
+            catalog = Catalog(root / "recordings" / "audio" / "db" / "recordings.sqlite3")
+
+            with patch("micsync.importer._copy_with_checksum", side_effect=AssertionError("unexpected copy")):
+                outcome = mirror_recording_to_raw(
+                    source_path=source_file,
+                    source_mount_path=source_mount,
+                    source_parent_folder=source_dir.name,
+                    volume_label="MIC 01",
+                    recordings_root=root / "recordings" / "audio",
+                    tmp_root=root / "recordings" / "audio" / "tmp",
+                    catalog=catalog,
+                    log_path=root / "micSync" / "logs" / "runs.log",
+                )
+
+            self.assertEqual(outcome.status, "duplicate")
+            self.assertEqual(outcome.raw_path, existing_raw)
+            self.assertFalse((root / "recordings" / "audio" / "tmp").exists())
+
     def test_derive_mirrored_recording_assigns_take_and_segment(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

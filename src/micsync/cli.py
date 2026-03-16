@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import signal
 import uuid
 
 from micsync.catalog import Catalog
@@ -15,7 +16,10 @@ from micsync.lock import LockManager
 from micsync.notify import (
     build_completion_message,
     build_incomplete_message,
+    build_stop_command,
     build_start_message,
+    build_stopped_message,
+    copy_to_clipboard,
     send_notification,
 )
 from micsync.scanner import scan_candidates
@@ -28,6 +32,7 @@ class RunSummary:
     failed_count: int = 0
     warning_count: int = 0
     total_bytes: int = 0
+    stopped: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-file-size-mb", type=int, default=None)
     parser.add_argument("--notify", default=None)
     parser.add_argument("--eject", default=None)
+    parser.add_argument("--stop", action="store_true")
     return parser
 
 
@@ -62,11 +68,42 @@ def _load_config(args: argparse.Namespace):
     )
 
 
+def _service_root() -> Path:
+    return Path(os.environ.get("NEXUS_DEPLOY_ROOT", str(Path(__file__).resolve().parents[2])))
+
+
+def _data_root(config) -> Path:
+    return Path(os.environ.get("NEXUS_DATA_ROOT", str(config.runtime_root.parent)))
+
+
 def run_import(args: argparse.Namespace) -> int:
     config = _load_config(args)
     run_root = config.runtime_root / "run"
     log_path = config.runtime_root / "logs" / "runs.log"
     lock = LockManager(run_root, stale_timeout_seconds=config.stale_lock_timeout_seconds)
+    stop_command = build_stop_command(
+        deploy_root=_service_root(),
+        data_root=_data_root(config),
+    )
+    if args.stop:
+        stop_requested = lock.request_stop()
+        if config.notify:
+            if stop_requested:
+                send_notification(
+                    title="micSync stop requested",
+                    message="graceful stop requested; current file will finish first",
+                )
+            else:
+                send_notification(
+                    title="micSync stop ignored",
+                    message="no active import is running",
+                )
+        print(
+            "micSync stop requested"
+            if stop_requested
+            else "No active micSync import is running"
+        )
+        return 0
     acquired = lock.acquire_or_request_rescan()
     if not acquired.acquired:
         return 0
@@ -78,8 +115,21 @@ def run_import(args: argparse.Namespace) -> int:
     summary = RunSummary()
     ejected_volumes: list[str] = []
     ejected_labels: set[str] = set()
+    signal_stop_requested = {"value": False}
+
+    def _request_graceful_stop(signum: int, _frame) -> None:
+        signal_stop_requested["value"] = True
+        lock.request_stop()
+
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, _request_graceful_stop)
+    signal.signal(signal.SIGTERM, _request_graceful_stop)
     try:
         while True:
+            if signal_stop_requested["value"] or lock.consume_stop_request():
+                summary.stopped = True
+                break
             lock.refresh("scanning")
             candidates = scan_candidates(
                 allow_extensions=set(config.extension_allowlist),
@@ -96,17 +146,26 @@ def run_import(args: argparse.Namespace) -> int:
             )
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
             if config.notify and pending_candidates:
+                stop_hint = (
+                    "copied exact stop command to clipboard"
+                    if copy_to_clipboard(stop_command)
+                    else stop_command
+                )
                 send_notification(
                     title="micSync mirror starting",
                     message=build_start_message(
                         candidate_count=len(pending_candidates),
                         total_bytes=pending_bytes,
+                        stop_hint=stop_hint,
                     ),
                 )
 
             any_processed = False
             mirrored_outcomes = []
             for candidate in pending_candidates:
+                if signal_stop_requested["value"] or lock.consume_stop_request():
+                    summary.stopped = True
+                    break
                 any_processed = True
                 seen_volumes[candidate.volume_label] = candidate.volume_root
                 lock.refresh(f"mirroring {candidate.source_path.name}")
@@ -135,7 +194,11 @@ def run_import(args: argparse.Namespace) -> int:
                     with log_path.open("a", encoding="utf-8") as handle:
                         handle.write(f"{datetime.now(timezone.utc).isoformat()} failed {candidate.source_path} {exc}\n")
 
-            if summary.failed_count == 0 and config.eject:
+            if summary.stopped:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with log_path.open("a", encoding="utf-8") as handle:
+                    handle.write(f"{datetime.now(timezone.utc).isoformat()} stopped after mirror phase request\n")
+            if summary.failed_count == 0 and config.eject and not summary.stopped:
                 for label, volume_root in seen_volumes.items():
                     if label in ejected_labels:
                         continue
@@ -144,6 +207,9 @@ def run_import(args: argparse.Namespace) -> int:
                         ejected_labels.add(label)
 
             for mirrored in mirrored_outcomes:
+                if signal_stop_requested["value"] or lock.consume_stop_request():
+                    summary.stopped = True
+                    break
                 lock.refresh(f"deriving {mirrored.raw_path.name}")
                 try:
                     derived = derive_mirrored_recording(
@@ -164,6 +230,8 @@ def run_import(args: argparse.Namespace) -> int:
                     with log_path.open("a", encoding="utf-8") as handle:
                         handle.write(f"{datetime.now(timezone.utc).isoformat()} failed {mirrored.raw_path} {exc}\n")
 
+            if summary.stopped:
+                break
             if not any_processed and not lock.consume_rescan_request():
                 break
             if not lock.consume_rescan_request():
@@ -171,7 +239,18 @@ def run_import(args: argparse.Namespace) -> int:
 
         elapsed_seconds = int((datetime.now(timezone.utc) - run_started).total_seconds())
         if config.notify:
-            if summary.failed_count == 0:
+            if summary.stopped:
+                send_notification(
+                    title="micSync import stopped",
+                    message=build_stopped_message(
+                        imported_count=summary.imported_count,
+                        duplicate_count=summary.duplicate_count,
+                        warning_count=summary.warning_count,
+                        total_bytes=summary.total_bytes,
+                        elapsed_seconds=elapsed_seconds,
+                    ),
+                )
+            elif summary.failed_count == 0:
                 send_notification(
                     title=(
                         "micSync import complete with warnings"
@@ -202,6 +281,8 @@ def run_import(args: argparse.Namespace) -> int:
                 )
         return 0 if summary.failed_count == 0 else 1
     finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
         lock.release()
 
 

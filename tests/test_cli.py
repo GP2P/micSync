@@ -49,3 +49,17 @@ class CliSmokeTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("usage", result.stdout.lower())
+
+    def test_standalone_wrapper_stop_command_exits_successfully(self) -> None:
+        env = os.environ.copy()
+        env.pop("NEXUS_DEPLOY_ROOT", None)
+        env.pop("NEXUS_DATA_ROOT", None)
+        result = subprocess.run(
+            [str(SERVICE_ROOT / "scripts" / "micsync.sh"), "--stop"],
+            cwd=SERVICE_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("micSync", result.stdout)

@@ -21,6 +21,7 @@ class LockManager:
         self.run_root.mkdir(parents=True, exist_ok=True)
         self.lock_path = self.run_root / "active.lock"
         self.rescan_path = self.run_root / "rescan.request"
+        self.stop_path = self.run_root / "stop.request"
         self.stale_timeout = timedelta(seconds=stale_timeout_seconds)
 
     def _now(self) -> datetime:
@@ -112,6 +113,27 @@ class LockManager:
         if not self.rescan_path.exists():
             return False
         self.rescan_path.unlink()
+        return True
+
+    def has_active_owner(self) -> bool:
+        payload = self._read_lock()
+        if payload is None:
+            return False
+        pid = int(payload.get("pid", 0))
+        heartbeat_at = datetime.fromisoformat(payload["last_heartbeat_at"])
+        is_stale = (self._now() - heartbeat_at) > self.stale_timeout
+        return self._pid_is_alive(pid) and not is_stale
+
+    def request_stop(self) -> bool:
+        if not self.has_active_owner():
+            return False
+        self.stop_path.write_text("1\n")
+        return True
+
+    def consume_stop_request(self) -> bool:
+        if not self.stop_path.exists():
+            return False
+        self.stop_path.unlink()
         return True
 
     def release(self) -> None:

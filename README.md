@@ -171,6 +171,12 @@ Example using the built-in defaults:
 ./scripts/micsync.sh --help
 ```
 
+Graceful stop request:
+
+```bash
+./scripts/micsync.sh --stop
+```
+
 The wrapper infers its root from its own location on disk, not from the caller's current working directory.
 
 If you are integrating `micSync` into a larger deployment that already sets `NEXUS_DEPLOY_ROOT` and `NEXUS_DATA_ROOT`, this wrapper will respect those existing values.
@@ -186,6 +192,8 @@ Recommended pattern:
 - concurrent triggers collapse into one active run via the lock/rescan mechanism
 
 This means the automation does not need to reliably pass a specific drive path for correctness.
+
+When an import starts, `micSync` copies the exact stop command for that run to the clipboard when possible and includes that fact in the start notification. Running the copied command, or `./scripts/micsync.sh --stop`, requests a graceful stop: the current file finishes first, then the importer skips the remaining work, releases the lock, and sends a stopped notification.
 
 ## Testing
 
@@ -212,6 +220,13 @@ The live validation contract is:
 - read-only behavior toward source volumes
 - disposable local destination
 - bounded file-size filter to avoid ingesting an entire device during tests
+
+## Stop Semantics
+
+- `./scripts/micsync.sh --stop` is the preferred way to stop a run
+- the importer stops between files and phases, not in the middle of a file copy
+- copied files are written through temp paths and `fsync` before promotion, so interrupted runs should not leave corrupted final files
+- force-terminating the process is usually recoverable, but it is not the same as a graceful stop because you can lose the final notification, leave temp files behind, and skip a clean lock handoff
 
 ## Limitations
 

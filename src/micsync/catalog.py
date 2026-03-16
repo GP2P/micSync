@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any
 
 
 class Catalog:
@@ -76,37 +75,6 @@ class Catalog:
                     first_seen_at text,
                     last_attempted_at text,
                     mirrored_at text,
-                    error_phase text,
-                    error_detail text
-                );
-
-                create table if not exists artifacts (
-                    id integer primary key,
-                    take_id integer not null references takes(id),
-                    segment_id integer not null references segments(id),
-                    segment_key text not null,
-                    run_id text,
-                    source_volume_label text,
-                    source_volume_identifier text,
-                    source_mount_path text,
-                    source_parent_folder text,
-                    source_filename text,
-                    source_relative_path text,
-                    source_size_bytes integer,
-                    source_checksum text,
-                    artifact_start_at text,
-                    artifact_end_at text,
-                    variant text,
-                    content_role text,
-                    duration_ms integer,
-                    physical_mic_id integer not null default 0,
-                    dest_relative_path text,
-                    dest_size_bytes integer,
-                    import_status text,
-                    first_seen_at text,
-                    last_attempted_at text,
-                    completed_at text,
-                    duplicate_of integer,
                     error_phase text,
                     error_detail text
                 );
@@ -403,17 +371,6 @@ class Catalog:
                 raise RuntimeError("source file upsert failed")
             return int(row["id"])
 
-    def insert_artifact(self, **fields: Any) -> int:
-        columns = ", ".join(fields.keys())
-        placeholders = ", ".join("?" for _ in fields)
-        values = tuple(fields.values())
-        with self._connect() as conn:
-            cursor = conn.execute(
-                f"insert into artifacts ({columns}) values ({placeholders})",
-                values,
-            )
-            return int(cursor.lastrowid)
-
     def fetch_take(self, take_id: int) -> sqlite3.Row:
         with self._connect() as conn:
             row = conn.execute(
@@ -454,16 +411,6 @@ class Catalog:
                 """,
                 (segment_id, source_file_id),
             )
-
-    def fetch_artifact(self, artifact_id: int) -> sqlite3.Row:
-        with self._connect() as conn:
-            row = conn.execute(
-                "select * from artifacts where id = ?",
-                (artifact_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(artifact_id)
-            return row
 
     def count_rows(self, table_name: str) -> int:
         with self._connect() as conn:

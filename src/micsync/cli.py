@@ -36,7 +36,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Import DJI Mic recordings into the Nexus shared recordings root.",
     )
     parser.add_argument("--max-file-size-mb", type=int, default=None)
-    parser.add_argument("--dest-subdir", default=None)
     parser.add_argument("--notify", default=None)
     parser.add_argument("--eject", default=None)
     return parser

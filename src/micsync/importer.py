@@ -69,10 +69,6 @@ def plan_destination_path(
         counter += 1
 
 
-def _recordings_relative_dir(start_at: datetime) -> Path:
-    return Path("audio") / start_at.strftime("%Y") / start_at.strftime("%m") / start_at.strftime("%d")
-
-
 def _raw_source_dir_name(volume_label: str | None, physical_mic_id: int) -> str:
     if physical_mic_id > 0:
         return f"MIC_{physical_mic_id:02d}"
@@ -291,7 +287,6 @@ def import_recording(
     catalog: Catalog,
     log_path: Path,
     run_id: str,
-    audio_subdir: str | None = None,
     segment_cadence_seconds: int = 1800,
     segment_group_tolerance_ms: int = 1000,
 ) -> ImportOutcome:

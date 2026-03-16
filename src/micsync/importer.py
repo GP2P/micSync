@@ -8,7 +8,12 @@ from pathlib import Path
 import re
 from typing import Callable
 
-from micsync.audio import derive_end_time, materialize_derived_file, read_duration_ms
+from micsync.audio import (
+    derive_end_time,
+    materialize_derived_file,
+    preserve_file_timestamps,
+    read_duration_ms,
+)
 from micsync.catalog import Catalog
 from micsync.logging_utils import append_run_log
 from micsync.parser import ParsedRecordingName, parse_physical_mic_id, parse_recording_name
@@ -166,6 +171,7 @@ def mirror_recording_to_raw(
     else:
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path.replace(raw_path)
+        preserve_file_timestamps(source_path=source_path, dest_path=raw_path)
 
     attempted_at = datetime.now().isoformat(timespec="seconds")
     source_file_id = catalog.upsert_source_file(

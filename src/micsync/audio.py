@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 
 def derive_end_time(start_at_iso: str, duration_ms: int | None) -> str | None:
@@ -38,6 +39,26 @@ def read_duration_ms(path: Path) -> int | None:
             except ValueError:
                 return None
     return None
+
+
+def preserve_file_timestamps(*, source_path: Path, dest_path: Path) -> None:
+    shutil.copystat(source_path, dest_path)
+
+    source_birthtime = getattr(source_path.stat(), "st_birthtime", None)
+    if sys.platform != "darwin" or source_birthtime is None:
+        return
+
+    subprocess.run(
+        [
+            "SetFile",
+            "-d",
+            datetime.fromtimestamp(source_birthtime).strftime("%m/%d/%Y %H:%M:%S"),
+            str(dest_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def materialize_derived_file(

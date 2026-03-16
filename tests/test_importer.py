@@ -1,6 +1,9 @@
+from datetime import datetime
+import os
+from pathlib import Path
+import subprocess
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from micsync.catalog import Catalog
@@ -13,6 +16,50 @@ from micsync.importer import (
 
 
 class ImporterTest(unittest.TestCase):
+    def test_mirror_recording_to_raw_preserves_source_file_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_mount = root / "MIC 01"
+            source_dir = source_mount / "TX_MIC001_20260308_143058"
+            source_dir.mkdir(parents=True)
+            source_file = source_dir / "TX02_MIC001_20260608_112048_orig.wav"
+            source_file.write_bytes(b"not-a-real-wav")
+            source_created_at = datetime(2024, 1, 2, 3, 4, 5)
+            source_modified_at = datetime(2024, 1, 2, 4, 5, 6)
+            subprocess.run(
+                [
+                    "SetFile",
+                    "-d",
+                    source_created_at.strftime("%m/%d/%Y %H:%M:%S"),
+                    str(source_file),
+                ],
+                check=True,
+            )
+            os.utime(
+                source_file,
+                (
+                    source_modified_at.timestamp(),
+                    source_modified_at.timestamp(),
+                ),
+            )
+            catalog = Catalog(root / "recordings" / "audio" / "db" / "recordings.sqlite3")
+
+            outcome = mirror_recording_to_raw(
+                source_path=source_file,
+                source_mount_path=source_mount,
+                source_parent_folder=source_dir.name,
+                volume_label="MIC 01",
+                recordings_root=root / "recordings" / "audio",
+                tmp_root=root / "recordings" / "audio" / "tmp",
+                catalog=catalog,
+                log_path=root / "micSync" / "logs" / "runs.log",
+            )
+
+            source_stat = source_file.stat()
+            mirrored_stat = outcome.raw_path.stat()
+            self.assertEqual(int(mirrored_stat.st_mtime), int(source_stat.st_mtime))
+            self.assertEqual(int(mirrored_stat.st_birthtime), int(source_stat.st_birthtime))
+
     def test_conflicting_duplicate_gets_dup_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

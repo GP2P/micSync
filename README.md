@@ -144,7 +144,9 @@ Standalone wrapper script:
 ./scripts/micSync.sh
 ```
 
-It sets these environment variables for the process:
+For normal imports, the wrapper now launches `micSync` in detached mode and returns immediately to the caller. That is the intended path for macOS Shortcuts so Shortcut execution does not wait for the full mirror-and-derive run.
+
+It sets these environment variables for both the initial trigger process and the detached child:
 
 - `NEXUS_DEPLOY_ROOT`
 - `NEXUS_DATA_ROOT`
@@ -155,16 +157,19 @@ Defaults:
 - `NEXUS_DATA_ROOT=<from $HOME/.config/nexus/env.sh if present>`
 - `NEXUS_DATA_ROOT=$NEXUS_DEPLOY_ROOT/data`
 
-Example bounded local run with explicit roots:
+Example interactive foreground run with explicit roots:
 
 ```bash
 NEXUS_DEPLOY_ROOT="$PWD" \
 NEXUS_DATA_ROOT=/tmp/micsync-test \
-./scripts/micSync.sh \
+PYTHONPATH=src \
+python3 -m micsync.cli \
   --max-file-size-mb 10 \
   --notify false \
   --eject false
 ```
+
+Foreground CLI runs print progress to stdout and still append the persistent run log under `$NEXUS_DATA_ROOT/micSync/logs/`.
 
 Example using the built-in defaults:
 
@@ -190,6 +195,8 @@ If you are integrating `micSync` into a larger deployment that already sets `NEX
 Recommended pattern:
 
 - Shortcut calls `./scripts/micSync.sh`
+- the wrapper launches `micSync` via `python3 -m micsync.cli --detach`
+- the detached child inherits the same `NEXUS_DEPLOY_ROOT`, `NEXUS_DATA_ROOT`, and `PYTHONPATH` values as the trigger process
 - `micSync` itself scans all mounted volumes
 - concurrent triggers collapse into one active run via the lock/rescan mechanism
 
@@ -211,7 +218,8 @@ Bounded live-device validation:
 ```bash
 NEXUS_DEPLOY_ROOT="$PWD" \
 NEXUS_DATA_ROOT=/tmp/micsync-live-test \
-./scripts/micSync.sh \
+PYTHONPATH=src \
+python3 -m micsync.cli \
   --max-file-size-mb 10 \
   --notify false \
   --eject false
@@ -226,6 +234,7 @@ The live validation contract is:
 ## Stop Semantics
 
 - `./scripts/micSync.sh --stop` is the preferred way to stop a run
+- `python3 -m micsync.cli --stop` is equivalent when you already have the same `NEXUS_DEPLOY_ROOT` / `NEXUS_DATA_ROOT` environment in scope
 - the importer stops between files and phases, not in the middle of a file copy
 - copied files are written through temp paths and `fsync` before promotion, so interrupted runs should not leave corrupted final files
 - force-terminating the process is usually recoverable, but it is not the same as a graceful stop because you can lose the final notification, leave temp files behind, and skip a clean lock handoff

@@ -12,4 +12,12 @@ export NEXUS_DEPLOY_ROOT="${NEXUS_DEPLOY_ROOT:-$SERVICE_ROOT}"
 export NEXUS_DATA_ROOT="${NEXUS_DATA_ROOT:-$SERVICE_ROOT/data}"
 export PYTHONPATH="$SERVICE_ROOT/src"
 
-exec python3 -m micsync.cli "$@"
+for arg in "$@"; do
+  case "$arg" in
+    --stop|-h|--help)
+      exec python3 -m micsync.cli "$@"
+      ;;
+  esac
+done
+
+exec python3 -m micsync.cli --detach "$@"

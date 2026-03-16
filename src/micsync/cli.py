@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import signal
+import subprocess
+import sys
 import uuid
 
 from micsync.catalog import Catalog
@@ -42,10 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog="micSync",
         description="Import DJI Mic recordings into the shared recordings root.",
     )
+    parser.add_argument("--detach", action="store_true")
     parser.add_argument("--max-file-size-mb", type=int, default=None)
     parser.add_argument("--notify", default=None)
     parser.add_argument("--eject", default=None)
     parser.add_argument("--stop", action="store_true")
+    parser.add_argument("--run-detached-child", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -76,6 +80,31 @@ def _service_root() -> Path:
 
 def _data_root(config) -> Path:
     return Path(os.environ.get("NEXUS_DATA_ROOT", str(config.runtime_root.parent)))
+
+
+def _emit_progress(message: str) -> None:
+    print(message, flush=True)
+
+
+def _detached_child_argv(argv: list[str]) -> list[str]:
+    child_args = [arg for arg in argv if arg != "--detach"]
+    child_args.append("--run-detached-child")
+    return child_args
+
+
+def _launch_detached(argv: list[str]) -> int:
+    child_env = dict(os.environ)
+    subprocess.Popen(
+        [sys.executable, "-m", "micsync.cli", *_detached_child_argv(argv)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+        env=child_env,
+        cwd=os.getcwd(),
+    )
+    return 0
 
 
 def run_import(args: argparse.Namespace) -> int:
@@ -133,6 +162,7 @@ def run_import(args: argparse.Namespace) -> int:
                 summary.stopped = True
                 break
             lock.refresh("scanning")
+            _emit_progress("micSync scanning mounted volumes")
             candidates = scan_candidates(
                 allow_extensions=set(config.extension_allowlist),
                 max_file_size_mb=config.max_file_size_mb,
@@ -147,6 +177,11 @@ def run_import(args: argparse.Namespace) -> int:
                 )
             )
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
+            if pending_candidates:
+                _emit_progress(
+                    "micSync mirror starting "
+                    f"candidates={len(pending_candidates)} bytes={pending_bytes}"
+                )
             if config.notify and pending_candidates:
                 stop_hint = (
                     "copied exact stop command to clipboard"
@@ -170,6 +205,7 @@ def run_import(args: argparse.Namespace) -> int:
                     break
                 any_processed = True
                 seen_volumes[candidate.volume_label] = candidate.volume_root
+                _emit_progress(f"micSync mirroring {candidate.source_path.name}")
                 lock.refresh(f"mirroring {candidate.source_path.name}")
                 try:
                     outcome = mirror_recording_to_raw(
@@ -212,6 +248,7 @@ def run_import(args: argparse.Namespace) -> int:
                 if signal_stop_requested["value"] or lock.consume_stop_request():
                     summary.stopped = True
                     break
+                _emit_progress(f"micSync deriving {mirrored.raw_path.name}")
                 lock.refresh(f"deriving {mirrored.raw_path.name}")
                 try:
                     derived = derive_mirrored_recording(
@@ -251,6 +288,16 @@ def run_import(args: argparse.Namespace) -> int:
             f"warning={summary.warning_count} "
             f"bytes={summary.total_bytes} "
             f"elapsed_seconds={elapsed_seconds}",
+        )
+        _emit_progress(
+            "micSync summary "
+            f"mirrored={summary.mirrored_count} "
+            f"derived={summary.derived_count} "
+            f"duplicate={summary.duplicate_count} "
+            f"failed={summary.failed_count} "
+            f"warning={summary.warning_count} "
+            f"bytes={summary.total_bytes} "
+            f"elapsed_seconds={elapsed_seconds}"
         )
         if config.notify:
             if summary.stopped:
@@ -304,7 +351,10 @@ def run_import(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    argv = sys.argv[1:]
+    args = build_parser().parse_args(argv)
+    if args.detach and not args.stop and not args.run_detached_child:
+        return _launch_detached(argv)
     return run_import(args)
 
 

@@ -10,7 +10,7 @@ import uuid
 from micsync.catalog import Catalog
 from micsync.config import apply_runtime_overrides, build_config, load_env_file
 from micsync.eject import eject_volume
-from micsync.importer import import_recording
+from micsync.importer import derive_mirrored_recording, mirror_recording_to_raw
 from micsync.lock import LockManager
 from micsync.notify import (
     build_completion_message,
@@ -77,6 +77,8 @@ def run_import(args: argparse.Namespace) -> int:
     catalog = Catalog(config.recordings_db_path)
     seen_volumes: dict[str, Path] = {}
     summary = RunSummary()
+    ejected_volumes: list[str] = []
+    ejected_labels: set[str] = set()
     try:
         while True:
             lock.refresh("scanning")
@@ -96,7 +98,7 @@ def run_import(args: argparse.Namespace) -> int:
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
             if config.notify and pending_candidates:
                 send_notification(
-                    title="micSync import starting",
+                    title="micSync mirror starting",
                     message=build_start_message(
                         candidate_count=len(pending_candidates),
                         total_bytes=pending_bytes,
@@ -104,12 +106,13 @@ def run_import(args: argparse.Namespace) -> int:
                 )
 
             any_processed = False
+            mirrored_outcomes = []
             for candidate in pending_candidates:
                 any_processed = True
                 seen_volumes[candidate.volume_label] = candidate.volume_root
-                lock.refresh(f"importing {candidate.source_path.name}")
+                lock.refresh(f"mirroring {candidate.source_path.name}")
                 try:
-                    outcome = import_recording(
+                    outcome = mirror_recording_to_raw(
                         source_path=candidate.source_path,
                         source_mount_path=candidate.volume_root,
                         source_parent_folder=candidate.source_parent_folder,
@@ -119,10 +122,8 @@ def run_import(args: argparse.Namespace) -> int:
                         catalog=catalog,
                         log_path=log_path,
                         run_id=run_id,
-                        audio_subdir=args.dest_subdir,
-                        segment_cadence_seconds=config.segment_cadence_seconds,
-                        segment_group_tolerance_ms=config.segment_group_tolerance_ms,
                     )
+                    mirrored_outcomes.append(outcome)
                     summary.total_bytes += outcome.size_bytes
                     summary.warning_count += outcome.warning_count
                     if outcome.status == "duplicate":
@@ -135,18 +136,38 @@ def run_import(args: argparse.Namespace) -> int:
                     with log_path.open("a", encoding="utf-8") as handle:
                         handle.write(f"{datetime.now(timezone.utc).isoformat()} failed {candidate.source_path} {exc}\n")
 
+            if summary.failed_count == 0 and config.eject:
+                for label, volume_root in seen_volumes.items():
+                    if label in ejected_labels:
+                        continue
+                    if eject_volume(volume_root):
+                        ejected_volumes.append(label)
+                        ejected_labels.add(label)
+
+            for mirrored in mirrored_outcomes:
+                lock.refresh(f"deriving {mirrored.raw_path.name}")
+                try:
+                    derived = derive_mirrored_recording(
+                        raw_path=mirrored.raw_path,
+                        source_file_id=mirrored.source_file_id,
+                        catalog=catalog,
+                        log_path=log_path,
+                        segment_cadence_seconds=config.segment_cadence_seconds,
+                        segment_group_tolerance_ms=config.segment_group_tolerance_ms,
+                    )
+                    summary.warning_count += max(0, derived.warning_count - mirrored.warning_count)
+                except Exception as exc:  # broad on purpose for run-level robustness
+                    summary.failed_count += 1
+                    log_path.parent.mkdir(parents=True, exist_ok=True)
+                    with log_path.open("a", encoding="utf-8") as handle:
+                        handle.write(f"{datetime.now(timezone.utc).isoformat()} failed {mirrored.raw_path} {exc}\n")
+
             if not any_processed and not lock.consume_rescan_request():
                 break
             if not lock.consume_rescan_request():
                 break
 
         elapsed_seconds = int((datetime.now(timezone.utc) - run_started).total_seconds())
-        ejected_volumes: list[str] = []
-        if summary.failed_count == 0 and config.eject:
-            for label, volume_root in seen_volumes.items():
-                if eject_volume(volume_root):
-                    ejected_volumes.append(label)
-
         if config.notify:
             if summary.failed_count == 0:
                 send_notification(

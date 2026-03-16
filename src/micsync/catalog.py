@@ -444,6 +444,17 @@ class Catalog:
                 raise KeyError(source_file_id)
             return row
 
+    def assign_source_file_to_segment(self, *, source_file_id: int, segment_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update source_files
+                set segment_id = ?
+                where id = ?
+                """,
+                (segment_id, source_file_id),
+            )
+
     def fetch_artifact(self, artifact_id: int) -> sqlite3.Row:
         with self._connect() as conn:
             row = conn.execute(

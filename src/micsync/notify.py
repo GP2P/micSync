@@ -40,7 +40,8 @@ def build_stop_command(*, deploy_root: Path, data_root: Path) -> str:
 
 def build_completion_message(
     *,
-    imported_count: int,
+    mirrored_count: int,
+    derived_count: int,
     duplicate_count: int,
     failed_count: int,
     warning_count: int,
@@ -49,7 +50,8 @@ def build_completion_message(
     ejected_volumes: list[str],
 ) -> str:
     parts = [
-        f"{imported_count} imported",
+        f"{mirrored_count} imported",
+        f"{derived_count} organized",
         f"{duplicate_count} duplicate",
         f"{failed_count} failed",
         f"{warning_count} warning",
@@ -63,7 +65,8 @@ def build_completion_message(
 
 def build_incomplete_message(
     *,
-    imported_count: int,
+    mirrored_count: int,
+    derived_count: int,
     duplicate_count: int,
     failed_count: int,
     warning_count: int,
@@ -71,23 +74,25 @@ def build_incomplete_message(
     elapsed_seconds: int,
 ) -> str:
     return (
-        f"incomplete | {imported_count} imported | {duplicate_count} duplicate | "
-        f"{failed_count} failed | {warning_count} warning | "
+        f"incomplete | {mirrored_count} imported | {derived_count} organized | "
+        f"{duplicate_count} duplicate | {failed_count} failed | {warning_count} warning | "
         f"{_format_bytes(total_bytes)} | {elapsed_seconds}s"
     )
 
 
 def build_stopped_message(
     *,
-    imported_count: int,
+    mirrored_count: int,
+    derived_count: int,
     duplicate_count: int,
     warning_count: int,
     total_bytes: int,
     elapsed_seconds: int,
 ) -> str:
     return (
-        f"stopped | {imported_count} imported | {duplicate_count} duplicate | "
-        f"{warning_count} warning | {_format_bytes(total_bytes)} | {elapsed_seconds}s"
+        f"stopped | {mirrored_count} imported | {derived_count} organized | "
+        f"{duplicate_count} duplicate | {warning_count} warning | "
+        f"{_format_bytes(total_bytes)} | {elapsed_seconds}s"
     )
 
 

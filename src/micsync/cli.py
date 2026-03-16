@@ -13,6 +13,7 @@ from micsync.config import apply_runtime_overrides, build_config, load_env_file
 from micsync.eject import eject_volume
 from micsync.importer import derive_mirrored_recording, mirror_recording_to_raw
 from micsync.lock import LockManager
+from micsync.logging_utils import append_run_log
 from micsync.notify import (
     build_completion_message,
     build_incomplete_message,
@@ -27,7 +28,8 @@ from micsync.scanner import scan_candidates
 
 @dataclass
 class RunSummary:
-    imported_count: int = 0
+    mirrored_count: int = 0
+    derived_count: int = 0
     duplicate_count: int = 0
     failed_count: int = 0
     warning_count: int = 0
@@ -187,7 +189,7 @@ def run_import(args: argparse.Namespace) -> int:
                     if outcome.status == "duplicate":
                         summary.duplicate_count += 1
                     else:
-                        summary.imported_count += 1
+                        summary.mirrored_count += 1
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
                     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +225,7 @@ def run_import(args: argparse.Namespace) -> int:
                         segment_cadence_seconds=config.segment_cadence_seconds,
                         segment_group_tolerance_ms=config.segment_group_tolerance_ms,
                     )
+                    summary.derived_count += 1
                     summary.warning_count += max(0, derived.warning_count - mirrored.warning_count)
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
@@ -238,12 +241,24 @@ def run_import(args: argparse.Namespace) -> int:
                 break
 
         elapsed_seconds = int((datetime.now(timezone.utc) - run_started).total_seconds())
+        append_run_log(
+            log_path,
+            "summary "
+            f"mirrored={summary.mirrored_count} "
+            f"derived={summary.derived_count} "
+            f"duplicate={summary.duplicate_count} "
+            f"failed={summary.failed_count} "
+            f"warning={summary.warning_count} "
+            f"bytes={summary.total_bytes} "
+            f"elapsed_seconds={elapsed_seconds}",
+        )
         if config.notify:
             if summary.stopped:
                 send_notification(
                     title="micSync import stopped",
                     message=build_stopped_message(
-                        imported_count=summary.imported_count,
+                        mirrored_count=summary.mirrored_count,
+                        derived_count=summary.derived_count,
                         duplicate_count=summary.duplicate_count,
                         warning_count=summary.warning_count,
                         total_bytes=summary.total_bytes,
@@ -258,7 +273,8 @@ def run_import(args: argparse.Namespace) -> int:
                         else "micSync import complete"
                     ),
                     message=build_completion_message(
-                        imported_count=summary.imported_count,
+                        mirrored_count=summary.mirrored_count,
+                        derived_count=summary.derived_count,
                         duplicate_count=summary.duplicate_count,
                         failed_count=summary.failed_count,
                         warning_count=summary.warning_count,
@@ -271,7 +287,8 @@ def run_import(args: argparse.Namespace) -> int:
                 send_notification(
                     title="micSync import incomplete",
                     message=build_incomplete_message(
-                        imported_count=summary.imported_count,
+                        mirrored_count=summary.mirrored_count,
+                        derived_count=summary.derived_count,
                         duplicate_count=summary.duplicate_count,
                         failed_count=summary.failed_count,
                         warning_count=summary.warning_count,

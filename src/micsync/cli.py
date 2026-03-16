@@ -75,7 +75,7 @@ def _load_config(args: argparse.Namespace):
 
 
 def _service_root() -> Path:
-    return Path(os.environ.get("NEXUS_DEPLOY_ROOT", str(Path(__file__).resolve().parents[2])))
+    return Path(__file__).resolve().parents[2]
 
 
 def _data_root(config) -> Path:
@@ -113,7 +113,7 @@ def run_import(args: argparse.Namespace) -> int:
     log_path = config.runtime_root / "logs" / "runs.log"
     lock = LockManager(run_root, stale_timeout_seconds=config.stale_lock_timeout_seconds)
     stop_command = build_stop_command(
-        deploy_root=_service_root(),
+        service_root=_service_root(),
         data_root=_data_root(config),
     )
     if args.stop:

@@ -70,12 +70,24 @@ class NotifyTest(unittest.TestCase):
 
     def test_build_stop_command_uses_absolute_paths(self) -> None:
         command = build_stop_command(
-            deploy_root=Path("/srv/micSync"),
+            service_root=Path("/srv/custom-checkout"),
             data_root=Path("/var/lib/micSync-data"),
         )
-        self.assertIn("NEXUS_DEPLOY_ROOT=/srv/micSync", command)
-        self.assertIn("NEXUS_DATA_ROOT=/var/lib/micSync-data", command)
-        self.assertIn("/srv/micSync/scripts/micSync.sh --stop", command)
+        self.assertEqual(
+            command,
+            "NEXUS_DATA_ROOT=/var/lib/micSync-data "
+            "/srv/custom-checkout/scripts/micSync.sh --stop",
+        )
+
+    def test_build_stop_command_does_not_assume_checkout_name(self) -> None:
+        command = build_stop_command(
+            service_root=Path("/srv/audio-importer"),
+            data_root=Path("/var/lib/micSync-data"),
+        )
+        self.assertIn(
+            "/srv/audio-importer/scripts/micSync.sh --stop",
+            command,
+        )
 
     @patch("micsync.notify.subprocess.run")
     def test_copy_to_clipboard_returns_true_on_success(self, mock_run) -> None:

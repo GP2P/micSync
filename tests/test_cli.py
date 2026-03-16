@@ -2,6 +2,7 @@ import argparse
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,9 +35,8 @@ class CliSmokeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("usage", result.stdout.lower())
 
-    def test_standalone_wrapper_prefers_explicit_environment_roots(self) -> None:
+    def test_standalone_wrapper_prefers_explicit_data_root(self) -> None:
         env = os.environ.copy()
-        env["NEXUS_DEPLOY_ROOT"] = "/tmp/micSync-deploy-root"
         env["NEXUS_DATA_ROOT"] = "/tmp/micSync-test-data"
         result = subprocess.run(
             [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--help"],
@@ -50,7 +50,6 @@ class CliSmokeTest(unittest.TestCase):
 
     def test_standalone_wrapper_works_without_preexisting_environment(self) -> None:
         env = os.environ.copy()
-        env.pop("NEXUS_DEPLOY_ROOT", None)
         env.pop("NEXUS_DATA_ROOT", None)
         result = subprocess.run(
             [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--help"],
@@ -65,7 +64,6 @@ class CliSmokeTest(unittest.TestCase):
     def test_standalone_wrapper_stop_command_exits_successfully(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             env = os.environ.copy()
-            env.pop("NEXUS_DEPLOY_ROOT", None)
             env.pop("NEXUS_DATA_ROOT", None)
             env["HOME"] = tmpdir
             result = subprocess.run(
@@ -105,7 +103,6 @@ class CliSmokeTest(unittest.TestCase):
             )
 
             env = os.environ.copy()
-            env.pop("NEXUS_DEPLOY_ROOT", None)
             env.pop("NEXUS_DATA_ROOT", None)
             env["HOME"] = str(home_dir)
             result = subprocess.run(
@@ -123,7 +120,7 @@ class CliSmokeTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertIn("micSync stop requested", result.stdout)
 
-    def test_standalone_wrapper_detaches_normal_import_and_preserves_roots(self) -> None:
+    def test_standalone_wrapper_detaches_normal_import_and_preserves_data_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_root = Path(tmpdir)
             fake_bin = tmp_root / "bin"
@@ -145,7 +142,6 @@ class CliSmokeTest(unittest.TestCase):
                         "    json.dumps(",
                         "        {",
                         '            "argv": sys.argv[1:],',
-                        '            "NEXUS_DEPLOY_ROOT": os.environ.get("NEXUS_DEPLOY_ROOT"),',
                         '            "NEXUS_DATA_ROOT": os.environ.get("NEXUS_DATA_ROOT"),',
                         "        }",
                         "    ),",
@@ -161,7 +157,6 @@ class CliSmokeTest(unittest.TestCase):
 
             env = os.environ.copy()
             env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["NEXUS_DEPLOY_ROOT"] = "/tmp/micSync-deploy-root"
             env["NEXUS_DATA_ROOT"] = "/tmp/micSync-data-root"
             result = subprocess.run(
                 [
@@ -181,8 +176,126 @@ class CliSmokeTest(unittest.TestCase):
                 capture["argv"],
                 ["-m", "micsync.cli", "--detach", "--notify", "false"],
             )
-            self.assertEqual(capture["NEXUS_DEPLOY_ROOT"], "/tmp/micSync-deploy-root")
             self.assertEqual(capture["NEXUS_DATA_ROOT"], "/tmp/micSync-data-root")
+
+    def test_wrapper_exports_pythonpath_for_child(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            fake_bin = tmp_root / "bin"
+            fake_bin.mkdir()
+            capture_path = tmp_root / "capture.json"
+            fake_python = fake_bin / "python3"
+            fake_python.write_text(
+                "\n".join(
+                    [
+                        "#!/bin/zsh",
+                        f"{sys.executable} - <<'PY' \"$@\"",
+                        "import json",
+                        "import os",
+                        "import pathlib",
+                        "import sys",
+                        "",
+                        f"capture_path = pathlib.Path({str(capture_path)!r})",
+                        "capture_path.write_text(",
+                        "    json.dumps(",
+                        "        {",
+                        '            "argv": sys.argv[1:],',
+                        '            "PYTHONPATH": os.environ.get("PYTHONPATH"),',
+                        "        }",
+                        "    ),",
+                        '    encoding="utf-8",',
+                        ")",
+                        "PY",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env.pop("NEXUS_DATA_ROOT", None)
+            env["HOME"] = str(tmp_root / "home")
+            result = subprocess.run(
+                [
+                    str(SERVICE_ROOT / "scripts" / "micSync.sh"),
+                    "--notify",
+                    "false",
+                ],
+                cwd=SERVICE_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0)
+            capture = json.loads(capture_path.read_text(encoding="utf-8"))
+            self.assertEqual(capture["PYTHONPATH"], str(SERVICE_ROOT / "src"))
+
+    def test_standalone_checkout_defaults_data_root_to_local_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            standalone_root = tmp_root / "audio-importer"
+            (standalone_root / "scripts").mkdir(parents=True)
+            (standalone_root / "src").mkdir()
+            shutil.copy2(
+                SERVICE_ROOT / "scripts" / "micSync.sh",
+                standalone_root / "scripts" / "micSync.sh",
+            )
+            (standalone_root / "scripts" / "micSync.sh").chmod(0o755)
+
+            fake_bin = tmp_root / "bin"
+            fake_bin.mkdir()
+            capture_path = tmp_root / "capture.json"
+            fake_python = fake_bin / "python3"
+            fake_python.write_text(
+                "\n".join(
+                    [
+                        "#!/bin/zsh",
+                        f"{sys.executable} - <<'PY' \"$@\"",
+                        "import json",
+                        "import os",
+                        "import pathlib",
+                        "import sys",
+                        "",
+                        f"capture_path = pathlib.Path({str(capture_path)!r})",
+                        "capture_path.write_text(",
+                        "    json.dumps(",
+                        "        {",
+                        '            "argv": sys.argv[1:],',
+                        '            "NEXUS_DATA_ROOT": os.environ.get("NEXUS_DATA_ROOT"),',
+                        "        }",
+                        "    ),",
+                        '    encoding="utf-8",',
+                        ")",
+                        "PY",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env.pop("NEXUS_DATA_ROOT", None)
+            env["HOME"] = str(tmp_root / "home")
+            result = subprocess.run(
+                [
+                    str(standalone_root / "scripts" / "micSync.sh"),
+                    "--notify",
+                    "false",
+                ],
+                cwd=standalone_root,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0)
+            capture = json.loads(capture_path.read_text(encoding="utf-8"))
+            self.assertEqual(capture["NEXUS_DATA_ROOT"], str(standalone_root / "data"))
 
 
 class CliRunTest(unittest.TestCase):

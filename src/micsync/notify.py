@@ -27,12 +27,9 @@ def build_start_message(
     if stop_hint:
         return f"{message} | stop: {stop_hint}"
     return message
-
-
-def build_stop_command(*, deploy_root: Path, data_root: Path) -> str:
-    script_path = deploy_root / "scripts" / "micSync.sh"
+def build_stop_command(*, service_root: Path, data_root: Path) -> str:
+    script_path = service_root / "scripts" / "micSync.sh"
     return (
-        f'NEXUS_DEPLOY_ROOT={shlex.quote(str(deploy_root))} '
         f'NEXUS_DATA_ROOT={shlex.quote(str(data_root))} '
         f'{shlex.quote(str(script_path))} --stop'
     )

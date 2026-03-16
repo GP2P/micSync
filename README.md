@@ -146,21 +146,16 @@ Standalone wrapper script:
 
 For normal imports, the wrapper now launches `micSync` in detached mode and returns immediately to the caller. That is the intended path for macOS Shortcuts so Shortcut execution does not wait for the full mirror-and-derive run.
 
-It sets these environment variables for both the initial trigger process and the detached child:
+It sets `NEXUS_DATA_ROOT` for both the initial trigger process and the detached child.
 
-- `NEXUS_DEPLOY_ROOT`
-- `NEXUS_DATA_ROOT`
+`NEXUS_DATA_ROOT` Resolution:
 
-Defaults:
-
-- `NEXUS_DEPLOY_ROOT=<service root inferred from ./scripts/micSync.sh>`
-- `NEXUS_DATA_ROOT=<from $HOME/.config/nexus/env.sh if present>`
-- `NEXUS_DATA_ROOT=$NEXUS_DEPLOY_ROOT/data`
+1. If `micSync` is being launched by a larger setup that provides `NEXUS_DATA_ROOT`, the wrapper uses it directly.
+2.  Otherwise, the wrapper tells the program to store data at `./data` in this repo.
 
 Example interactive foreground run with explicit roots:
 
 ```bash
-NEXUS_DEPLOY_ROOT="$PWD" \
 NEXUS_DATA_ROOT=/tmp/micsync-test \
 PYTHONPATH=src \
 python3 -m micsync.cli \
@@ -184,9 +179,6 @@ Graceful stop request:
 ```
 
 The wrapper infers its root from its own location on disk, not from the caller's current working directory.
-If `NEXUS_DATA_ROOT` is not already set and `$HOME/.config/nexus/env.sh` exists, the wrapper will source that file before falling back to `$NEXUS_DEPLOY_ROOT/data`.
-
-If you are integrating `micSync` into a larger deployment that already sets `NEXUS_DEPLOY_ROOT` and `NEXUS_DATA_ROOT`, this wrapper will respect those existing values.
 
 ## Shortcuts Integration
 
@@ -196,7 +188,7 @@ Recommended pattern:
 
 - Shortcut calls `./scripts/micSync.sh`
 - the wrapper launches `micSync` via `python3 -m micsync.cli --detach`
-- the detached child inherits the same `NEXUS_DEPLOY_ROOT`, `NEXUS_DATA_ROOT`, and `PYTHONPATH` values as the trigger process
+- the detached child inherits the same `NEXUS_DATA_ROOT` and `PYTHONPATH` values as the trigger process
 - `micSync` itself scans all mounted volumes
 - concurrent triggers collapse into one active run via the lock/rescan mechanism
 
@@ -216,7 +208,6 @@ PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
 Bounded live-device validation:
 
 ```bash
-NEXUS_DEPLOY_ROOT="$PWD" \
 NEXUS_DATA_ROOT=/tmp/micsync-live-test \
 PYTHONPATH=src \
 python3 -m micsync.cli \
@@ -234,7 +225,7 @@ The live validation contract is:
 ## Stop Semantics
 
 - `./scripts/micSync.sh --stop` is the preferred way to stop a run
-- `python3 -m micsync.cli --stop` is equivalent when you already have the same `NEXUS_DEPLOY_ROOT` / `NEXUS_DATA_ROOT` environment in scope
+- `python3 -m micsync.cli --stop` is equivalent when you already have the same `NEXUS_DATA_ROOT` environment in scope
 - the importer stops between files and phases, not in the middle of a file copy
 - copied files are written through temp paths and `fsync` before promotion, so interrupted runs should not leave corrupted final files
 - force-terminating the process is usually recoverable, but it is not the same as a graceful stop because you can lose the final notification, leave temp files behind, and skip a clean lock handoff

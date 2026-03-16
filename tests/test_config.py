@@ -22,7 +22,7 @@ class ConfigTest(unittest.TestCase):
             Path("/tmp/nexus-data/recordings/audio/db/recordings.sqlite3"),
         )
         self.assertEqual(cfg.recordings_tmp_root, Path("/tmp/nexus-data/recordings/audio/tmp"))
-        self.assertFalse(cfg.enable_derived_outputs)
+        self.assertTrue(cfg.enable_derived_outputs)
         self.assertEqual(cfg.derived_outputs_strategy, "clone_then_copy")
         self.assertIsNone(cfg.max_file_size_mb)
         self.assertEqual(cfg.segment_cadence_seconds, 1800)

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import plistlib
 import signal
 import subprocess
 import sys
@@ -46,8 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--detach", action="store_true")
     parser.add_argument("--max-file-size-mb", type=int, default=None)
+    parser.add_argument("--derived", default=None)
     parser.add_argument("--notify", default=None)
     parser.add_argument("--eject", default=None)
+    parser.add_argument("--source-volume", action="append", default=None)
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--run-detached-child", action="store_true", help=argparse.SUPPRESS)
     return parser
@@ -69,6 +72,7 @@ def _load_config(args: argparse.Namespace):
     return apply_runtime_overrides(
         config,
         max_file_size_mb=args.max_file_size_mb,
+        derived=_parse_optional_bool(getattr(args, "derived", None)),
         notify=_parse_optional_bool(args.notify),
         eject=_parse_optional_bool(args.eject),
     )
@@ -101,6 +105,61 @@ def _launch_detached(argv: list[str]) -> int:
         cwd=os.getcwd(),
     )
     return 0
+
+
+def _resolve_source_volumes(raw_paths: list[str] | None) -> list[Path]:
+    if not raw_paths:
+        return []
+
+    seen: set[Path] = set()
+    resolved: list[Path] = []
+    for raw_path in raw_paths:
+        path = Path(raw_path).expanduser()
+        if path in seen:
+            continue
+        seen.add(path)
+        resolved.append(path)
+    return resolved
+
+
+def _nearest_existing_path(path: Path) -> Path:
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    return probe
+
+
+def _recordings_root_supports_clone(path: Path) -> tuple[bool, str | None]:
+    probe = _nearest_existing_path(path)
+    try:
+        result = subprocess.run(
+            ["diskutil", "info", "-plist", str(probe)],
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False, "diskutil is unavailable"
+
+    if result.returncode != 0:
+        return False, f"diskutil info failed for {probe}"
+
+    try:
+        info = plistlib.loads(result.stdout)
+    except Exception:
+        return False, f"diskutil info returned unreadable data for {probe}"
+
+    filesystem_type = str(info.get("FilesystemType") or "").strip()
+    if filesystem_type.lower() == "apfs":
+        return True, None
+    if filesystem_type:
+        return False, f"{probe} uses {filesystem_type}, not APFS"
+    return False, f"filesystem type is unknown for {probe}"
+
+
+def _preflight_derived_outputs(config) -> tuple[bool, str | None]:
+    if not config.enable_derived_outputs:
+        return False, None
+    return _recordings_root_supports_clone(config.recordings_root)
 
 
 def _pending_derivation_queue(config, catalog: Catalog) -> list[tuple[int, Path, str, int]]:
@@ -179,6 +238,7 @@ def run_import(args: argparse.Namespace) -> int:
     ejected_volumes: list[str] = []
     ejected_labels: set[str] = set()
     signal_stop_requested = {"value": False}
+    source_volumes = _resolve_source_volumes(getattr(args, "source_volume", None))
 
     def _request_graceful_stop(signum: int, _frame) -> None:
         signal_stop_requested["value"] = True
@@ -194,6 +254,21 @@ def run_import(args: argparse.Namespace) -> int:
             f"run_id={run_id} "
             f"detached={str(getattr(args, 'run_detached_child', False)).lower()}"
         )
+        if source_volumes:
+            log_event(
+                "micSync source volumes "
+                + ", ".join(str(path) for path in source_volumes)
+            )
+        derived_enabled, derived_reason = _preflight_derived_outputs(config)
+        if config.enable_derived_outputs and not derived_enabled:
+            log_event(f"micSync derived outputs disabled: {derived_reason}")
+        config = apply_runtime_overrides(
+            config,
+            max_file_size_mb=None,
+            derived=derived_enabled,
+            notify=None,
+            eject=None,
+        )
         if acquired.recovered_stale_lock:
             log_event("micSync recovered stale lock")
         while True:
@@ -207,6 +282,7 @@ def run_import(args: argparse.Namespace) -> int:
                 allow_extensions=set(config.extension_allowlist),
                 max_file_size_mb=config.max_file_size_mb,
                 exclude_volume_labels={"Macintosh HD"},
+                include_volume_roots=source_volumes or None,
             )
             pending_candidates = [c for c in candidates if c.volume_root.name not in {"Macintosh HD"}]
             pending_candidates.sort(

@@ -12,7 +12,7 @@ from unittest import mock
 from pathlib import Path
 
 from micsync.catalog import Catalog
-from micsync.cli import run_import
+from micsync.cli import build_parser, run_import
 from micsync.config import Config
 from micsync.importer import MirrorOutcome
 from micsync.lock import LockAcquireResult
@@ -23,6 +23,21 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliSmokeTest(unittest.TestCase):
+    def test_build_parser_accepts_repeatable_source_volumes_and_derived_toggle(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "--source-volume",
+                "/Volumes/MIC 01",
+                "--source-volume",
+                "/Volumes/MIC 02",
+                "--derived",
+                "false",
+            ]
+        )
+
+        self.assertEqual(args.source_volume, ["/Volumes/MIC 01", "/Volumes/MIC 02"])
+        self.assertEqual(args.derived, "false")
+
     def test_help_exits_successfully(self) -> None:
         env = os.environ.copy()
         env["PYTHONPATH"] = "src"
@@ -162,6 +177,12 @@ class CliSmokeTest(unittest.TestCase):
             result = subprocess.run(
                 [
                     str(SERVICE_ROOT / "scripts" / "micSync.sh"),
+                    "--source-volume",
+                    "/Volumes/MIC 01",
+                    "--source-volume",
+                    "/Volumes/MIC 02",
+                    "--derived",
+                    "false",
                     "--notify",
                     "false",
                 ],
@@ -175,7 +196,19 @@ class CliSmokeTest(unittest.TestCase):
             capture = json.loads(capture_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 capture["argv"],
-                ["-m", "micsync.cli", "--detach", "--notify", "false"],
+                [
+                    "-m",
+                    "micsync.cli",
+                    "--detach",
+                    "--source-volume",
+                    "/Volumes/MIC 01",
+                    "--source-volume",
+                    "/Volumes/MIC 02",
+                    "--derived",
+                    "false",
+                    "--notify",
+                    "false",
+                ],
             )
             self.assertEqual(capture["NEXUS_DATA_ROOT"], "/tmp/micSync-data-root")
 
@@ -300,6 +333,98 @@ class CliSmokeTest(unittest.TestCase):
 
 
 class CliRunTest(unittest.TestCase):
+    def test_preflight_disables_derived_outputs_when_clone_support_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            recordings_root = tmp_path / "recordings"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=True,
+                derived_outputs_strategy="clone_then_copy",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=False,
+                eject=False,
+            )
+            candidate = CandidateFile(
+                volume_label="MIC 1",
+                volume_root=tmp_path / "Volumes" / "MIC 1",
+                source_path=tmp_path / "Volumes" / "MIC 1" / "A" / "TX01_MIC001_20260315_120000.wav",
+                source_parent_folder="A",
+                file_size_bytes=128,
+            )
+
+            class FakeLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return False
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            args = argparse.Namespace(
+                max_file_size_mb=None,
+                notify=None,
+                eject=None,
+                derived=None,
+                source_volume=None,
+                stop=False,
+                run_detached_child=False,
+            )
+            mirrored = MirrorOutcome(
+                raw_path=recordings_root / "raw" / "MIC_01" / "A" / candidate.source_path.name,
+                checksum="abc123",
+                size_bytes=128,
+                status="mirrored",
+                source_file_id=1,
+                warning_count=0,
+            )
+
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=FakeLock()),
+                mock.patch("micsync.cli.scan_candidates", return_value=[candidate]),
+                mock.patch("micsync.cli._preflight_derived_outputs", return_value=(False, "recordings root is not APFS")),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+                mock.patch("micsync.cli.copy_to_clipboard", return_value=False),
+                mock.patch("micsync.cli.send_notification"),
+                mock.patch("micsync.cli.mirror_recording_to_raw", return_value=mirrored),
+                mock.patch(
+                    "micsync.cli._pending_derivation_queue",
+                    return_value=[(mirrored.source_file_id, mirrored.raw_path, candidate.source_path.name, 0)],
+                ),
+                mock.patch("micsync.cli.derive_mirrored_recording") as derive_mirrored_recording,
+            ):
+                derive_mirrored_recording.return_value = mock.Mock(warning_count=0)
+                result = run_import(args)
+
+            self.assertEqual(result, 0)
+            self.assertFalse(derive_mirrored_recording.call_args.kwargs["enable_derived_outputs"])
+
     def test_foreground_run_prints_progress_to_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

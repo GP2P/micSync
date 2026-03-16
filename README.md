@@ -122,7 +122,7 @@ MICSYNC_RUNTIME_ROOT=$NEXUS_DATA_ROOT/micSync
 MICSYNC_RECORDINGS_ROOT=$NEXUS_DATA_ROOT/recordings/audio
 MICSYNC_RECORDINGS_DB_PATH=$NEXUS_DATA_ROOT/recordings/audio/db/recordings.sqlite3
 MICSYNC_EXTENSION_ALLOWLIST=.wav
-MICSYNC_ENABLE_DERIVED_OUTPUTS=false
+MICSYNC_ENABLE_DERIVED_OUTPUTS=true
 MICSYNC_DERIVED_OUTPUTS_STRATEGY=clone_then_copy
 MICSYNC_SEGMENT_CADENCE_SECONDS=1800
 MICSYNC_SEGMENT_GROUP_TOLERANCE_MS=1000
@@ -133,7 +133,8 @@ Note: `NEXUS_DATA_ROOT` can point at any parent directory where you want `micSyn
 
 Notes:
 
-- `MICSYNC_ENABLE_DERIVED_OUTPUTS=false` keeps the system in `raw + db` mode only.
+- `MICSYNC_ENABLE_DERIVED_OUTPUTS=true` enables `derived/normalized/` by default.
+- `micSync` disables derived output automatically for a run when the shared recordings root is not on APFS, because clone-backed normalized files require APFS support.
 - `MICSYNC_DERIVED_OUTPUTS_STRATEGY=clone_then_copy` prefers APFS clone-on-write on macOS and falls back to ordinary copy.
 - `MICSYNC_SEGMENT_GROUP_TOLERANCE_MS=1000` exists because real DJI 30-minute chunks are not perfectly exact at the millisecond level.
 
@@ -143,6 +144,14 @@ Standalone wrapper script:
 
 ```bash
 ./scripts/micSync.sh
+```
+
+Common Shortcut-oriented variants:
+
+```bash
+./scripts/micSync.sh --derived false
+./scripts/micSync.sh --source-volume "/Volumes/MIC 01"
+./scripts/micSync.sh --source-volume "/Volumes/MIC 01" --source-volume "/Volumes/MIC 02"
 ```
 
 For normal imports, the wrapper now launches `micSync` in detached mode and returns immediately to the caller. That is the intended path for macOS Shortcuts so Shortcut execution does not wait for the full mirror-and-derive run.
@@ -190,10 +199,11 @@ Recommended pattern:
 - Shortcut calls `./scripts/micSync.sh`
 - the wrapper launches `micSync` via `python3 -m micsync.cli --detach`
 - the detached child inherits the same `NEXUS_DATA_ROOT` and `PYTHONPATH` values as the trigger process
-- `micSync` itself scans all mounted volumes
+- `micSync` scans all mounted volumes by default, or only the repeatable `--source-volume` paths when provided
+- Shortcut can pass `--derived true` or `--derived false` to toggle normalized output for that run
 - concurrent triggers collapse into one active run via the lock/rescan mechanism
 
-This means the automation does not need to reliably pass a specific drive path for correctness.
+This means the automation does not need to reliably pass a specific drive path for correctness, but it can if you want to scope a run to specific mounted volumes.
 
 When an import starts, `micSync` copies the exact stop command for that run to the clipboard when possible and includes that fact in the start notification. Running the copied command, or `./scripts/micSync.sh --stop`, requests a graceful stop: the current file finishes first, then the importer skips the remaining work, releases the lock, and sends a stopped notification.
 

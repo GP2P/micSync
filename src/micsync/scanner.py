@@ -36,13 +36,19 @@ def scan_candidates(
     max_file_size_mb: int | None,
     volumes_root: Path = Path("/Volumes"),
     exclude_volume_labels: set[str] | None = None,
+    include_volume_roots: list[Path] | None = None,
 ) -> list[CandidateFile]:
-    if not volumes_root.exists():
+    if include_volume_roots is None and not volumes_root.exists():
         return []
 
     excluded = exclude_volume_labels or set()
     candidates: list[CandidateFile] = []
-    for volume_root in sorted(path for path in volumes_root.iterdir() if path.is_dir()):
+    if include_volume_roots is None:
+        volume_roots = sorted(path for path in volumes_root.iterdir() if path.is_dir())
+    else:
+        volume_roots = sorted({path for path in include_volume_roots if path.is_dir()})
+
+    for volume_root in volume_roots:
         if volume_root.name in excluded:
             continue
         for root, _, files in os.walk(volume_root, topdown=True, onerror=lambda _: None):

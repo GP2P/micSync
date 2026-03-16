@@ -44,6 +44,27 @@ class AudioTest(unittest.TestCase):
             self.assertEqual(len(candidates), 1)
             self.assertEqual(candidates[0].volume_label, "MIC 01")
 
+    def test_scan_candidates_can_limit_to_explicit_volume_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            volumes_root = Path(tmpdir)
+            included_volume = volumes_root / "MIC 01"
+            skipped_volume = volumes_root / "MIC 02"
+            included_volume.mkdir()
+            skipped_volume.mkdir()
+            (included_volume / "TX_MIC001_20260308_143058").mkdir()
+            (included_volume / "TX_MIC001_20260308_143058" / "TX02_MIC001_20260608_112048_orig.wav").write_bytes(b"one")
+            (skipped_volume / "TX_MIC001_20260308_143058").mkdir()
+            (skipped_volume / "TX_MIC001_20260308_143058" / "TX02_MIC002_20260608_112048_orig.wav").write_bytes(b"two")
+
+            candidates = scan_candidates(
+                allow_extensions={".wav"},
+                max_file_size_mb=10,
+                include_volume_roots=[included_volume],
+            )
+
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(candidates[0].volume_root, included_volume)
+
     def test_materialize_derived_file_falls_back_to_copy_when_clone_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

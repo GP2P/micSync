@@ -66,7 +66,7 @@ def build_config(nexus_data_root: Path, env: Mapping[str, str]) -> Config:
         variant_policy=env.get("MICSYNC_VARIANT_POLICY", "all"),
         enable_derived_outputs=_coerce_bool(
             env.get("MICSYNC_ENABLE_DERIVED_OUTPUTS"),
-            False,
+            True,
         ),
         derived_outputs_strategy=env.get(
             "MICSYNC_DERIVED_OUTPUTS_STRATEGY",
@@ -103,10 +103,14 @@ def apply_runtime_overrides(
     max_file_size_mb: int | None,
     notify: bool | None,
     eject: bool | None,
+    derived: bool | None,
 ) -> Config:
     return replace(
         config,
         max_file_size_mb=config.max_file_size_mb if max_file_size_mb is None else max_file_size_mb,
+        enable_derived_outputs=(
+            config.enable_derived_outputs if derived is None else derived
+        ),
         notify=config.notify if notify is None else notify,
         eject=config.eject if eject is None else eject,
     )

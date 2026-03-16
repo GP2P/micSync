@@ -51,8 +51,12 @@ def scan_candidates(
     for volume_root in volume_roots:
         if volume_root.name in excluded:
             continue
-        for root, _, files in os.walk(volume_root, topdown=True, onerror=lambda _: None):
+        for root, dirnames, files in os.walk(volume_root, topdown=True, onerror=lambda _: None):
             root_path = Path(root)
+            if root_path == volume_root:
+                dirnames[:] = sorted(
+                    dirname for dirname in dirnames if dirname.startswith("TX_MIC")
+                )
             for filename in files:
                 path = root_path / filename
                 try:

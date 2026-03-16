@@ -326,7 +326,7 @@ class Catalog:
                     error_detail
                 ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(source_key) do update set
-                    segment_id=excluded.segment_id,
+                    segment_id=coalesce(excluded.segment_id, source_files.segment_id),
                     source_volume_label=excluded.source_volume_label,
                     source_volume_identifier=excluded.source_volume_identifier,
                     source_mount_path=excluded.source_mount_path,

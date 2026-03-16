@@ -239,3 +239,87 @@ class CatalogTest(unittest.TestCase):
                 [int(row["id"]) for row in ordered_rows],
                 [earliest_id, middle_id, latest_id],
             )
+
+    def test_repeated_duplicate_upsert_preserves_existing_segment_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "recordings.sqlite3"
+            catalog = Catalog(db_path)
+            take_id = catalog.upsert_take(
+                take_key="20260608_112048_TX02_MIC001",
+                take_start_at="2026-06-08T11:20:48",
+                take_end_at=None,
+                tx_slot="TX02",
+                physical_mic_id=2,
+                source_parent_folder="TX_MIC001_20260308_143058",
+            )
+            segment_id = catalog.upsert_segment(
+                take_id=take_id,
+                segment_key="20260608_112048_TX02_MIC001",
+                segment_start_at="2026-06-08T11:20:48",
+                segment_end_at=None,
+                tx_slot="TX02",
+                mic_sequence="MIC001",
+                physical_mic_id=2,
+                source_parent_folder="TX_MIC001_20260308_143058",
+                duration_ms=None,
+                first_seen_at="2026-06-08T11:21:00",
+                last_attempted_at="2026-06-08T11:21:00",
+                completed_at="2026-06-08T11:21:00",
+            )
+            source_key = "raw/MIC_01/TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav"
+            source_file_id = catalog.upsert_source_file(
+                source_key=source_key,
+                segment_id=segment_id,
+                source_volume_label="MIC 01",
+                source_volume_identifier="MIC 01",
+                source_mount_path="/Volumes/MIC 01",
+                source_parent_folder="TX_MIC001_20260308_143058",
+                source_filename="TX02_MIC001_20260608_112048_orig.wav",
+                source_relative_path="TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",
+                physical_mic_id=1,
+                raw_relative_path=source_key,
+                source_size_bytes=123,
+                source_checksum="abc123",
+                recording_start_at="2026-06-08T11:20:48",
+                recording_end_at=None,
+                duration_ms=None,
+                variant="orig",
+                mirror_status="mirrored",
+                first_seen_at="2026-06-08T11:21:00",
+                last_attempted_at="2026-06-08T11:21:00",
+                mirrored_at="2026-06-08T11:21:02",
+                error_phase=None,
+                error_detail=None,
+            )
+
+            repeated_id = catalog.upsert_source_file(
+                source_key=source_key,
+                segment_id=None,
+                source_volume_label="MIC 01",
+                source_volume_identifier="MIC 01",
+                source_mount_path="/Volumes/MIC 01",
+                source_parent_folder="TX_MIC001_20260308_143058",
+                source_filename="TX02_MIC001_20260608_112048_orig.wav",
+                source_relative_path="TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",
+                physical_mic_id=1,
+                raw_relative_path=source_key,
+                source_size_bytes=123,
+                source_checksum="abc123",
+                recording_start_at="2026-06-08T11:20:48",
+                recording_end_at=None,
+                duration_ms=None,
+                variant="orig",
+                mirror_status="duplicate",
+                first_seen_at="2026-06-08T11:21:00",
+                last_attempted_at="2026-06-08T11:30:00",
+                mirrored_at="2026-06-08T11:21:02",
+                error_phase=None,
+                error_detail=None,
+            )
+
+            self.assertEqual(repeated_id, source_file_id)
+            row = catalog.fetch_source_file(source_file_id)
+            self.assertEqual(row["segment_id"], segment_id)
+            self.assertEqual(row["mirror_status"], "duplicate")
+            self.assertEqual(row["last_attempted_at"], "2026-06-08T11:30:00")
+            self.assertEqual(catalog.fetch_pending_source_files_for_derivation(), [])

@@ -16,7 +16,11 @@ from micsync.config import apply_runtime_overrides, build_config, load_env_file
 from micsync.eject import eject_volume
 from micsync.importer import derive_mirrored_recording, mirror_recording_to_raw
 from micsync.lock import LockManager
-from micsync.logging_utils import append_run_log, build_run_logger
+from micsync.logging_utils import (
+    build_event_line,
+    build_progress_line,
+    build_run_logger,
+)
 from micsync.notify import (
     build_completion_message,
     build_incomplete_message,
@@ -185,9 +189,9 @@ def _preflight_derived_outputs(config) -> tuple[bool, str | None]:
     return _recordings_root_supports_clone(config.recordings_root)
 
 
-def _pending_derivation_queue(config, catalog: Catalog) -> list[tuple[int, Path, str, int]]:
+def _pending_derivation_queue(config, catalog: Catalog) -> list[tuple[int, Path, str, int, int]]:
     pending_rows = catalog.fetch_pending_source_files_for_derivation()
-    queue: list[tuple[int, Path, str, int]] = []
+    queue: list[tuple[int, Path, str, int, int]] = []
     for row in pending_rows:
         raw_relative_path = row["raw_relative_path"]
         if not raw_relative_path:
@@ -196,15 +200,33 @@ def _pending_derivation_queue(config, catalog: Catalog) -> list[tuple[int, Path,
         existing_warning_count = (
             1 if "error_detail" in row_keys and row["error_detail"] else 0
         )
+        source_size_bytes = int(row["source_size_bytes"] or 0) if "source_size_bytes" in row_keys else 0
         queue.append(
             (
                 int(row["id"]),
                 config.recordings_root / str(raw_relative_path),
                 str(row["source_filename"]),
                 existing_warning_count,
+                source_size_bytes,
             )
         )
     return queue
+
+
+def _unpack_derivation_queue_item(
+    item: tuple[int, Path, str, int] | tuple[int, Path, str, int, int],
+) -> tuple[int, Path, str, int, int]:
+    if len(item) == 5:
+        return item
+    source_file_id, raw_path, source_filename, existing_warning_count = item
+    fallback_size_bytes = raw_path.stat().st_size if raw_path.exists() else 0
+    return (
+        source_file_id,
+        raw_path,
+        source_filename,
+        existing_warning_count,
+        fallback_size_bytes,
+    )
 
 
 def run_import(args: argparse.Namespace) -> int:
@@ -222,11 +244,13 @@ def run_import(args: argparse.Namespace) -> int:
     )
     if args.stop:
         stop_requested = lock.request_stop()
-        append_run_log(
-            log_path,
-            "micSync stop requested"
-            if stop_requested
-            else "micSync stop ignored; no active import is running",
+        log_event(
+            build_event_line(
+                "micSync stop requested"
+                if stop_requested
+                else "micSync stop ignored; no active import is running",
+                kind="stop",
+            )
         )
         if config.notify:
             if stop_requested:
@@ -239,17 +263,15 @@ def run_import(args: argparse.Namespace) -> int:
                     title="micSync stop ignored",
                     message="no active import is running",
                 )
-        print(
-            "micSync stop requested"
-            if stop_requested
-            else "No active micSync import is running"
-        )
         return 0
     acquired = lock.acquire_or_request_rescan()
     if not acquired.acquired:
         log_event(
-            "micSync lock busy requested_rescan="
-            f"{str(acquired.requested_rescan).lower()}"
+            build_event_line(
+                "micSync lock busy requested_rescan="
+                f"{str(acquired.requested_rescan).lower()}",
+                kind="lock",
+            )
         )
         return 0
 
@@ -273,18 +295,29 @@ def run_import(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, _request_graceful_stop)
     try:
         log_event(
-            "micSync run started "
-            f"run_id={run_id} "
-            f"detached={str(getattr(args, 'run_detached_child', False)).lower()}"
+            build_event_line(
+                "micSync run started "
+                f"run_id={run_id} "
+                f"detached={str(getattr(args, 'run_detached_child', False)).lower()}",
+                kind="run",
+            )
         )
         if source_volumes:
             log_event(
-                "micSync source volumes "
-                + ", ".join(str(path) for path in source_volumes)
+                build_event_line(
+                    "micSync source volumes "
+                    + ", ".join(str(path) for path in source_volumes),
+                    kind="event",
+                )
             )
         derived_enabled, derived_reason = _preflight_derived_outputs(config)
         if config.enable_derived_outputs and not derived_enabled:
-            log_event(f"micSync derived outputs disabled: {derived_reason}")
+            log_event(
+                build_event_line(
+                    f"micSync derived outputs disabled: {derived_reason}",
+                    kind="event",
+                )
+            )
         config = apply_runtime_overrides(
             config,
             max_file_size_mb=None,
@@ -293,14 +326,14 @@ def run_import(args: argparse.Namespace) -> int:
             eject=None,
         )
         if acquired.recovered_stale_lock:
-            log_event("micSync recovered stale lock")
+            log_event(build_event_line("micSync recovered stale lock", kind="lock"))
         while True:
             if signal_stop_requested["value"] or lock.consume_stop_request():
                 summary.stopped = True
-                log_event("micSync stop requested before scan")
+                log_event(build_event_line("micSync stop requested before scan", kind="stop"))
                 break
             lock.refresh("scanning")
-            log_event("micSync scanning mounted volumes")
+            log_event(build_event_line("micSync scanning mounted volumes", kind="scan"))
             candidates = scan_candidates(
                 allow_extensions=set(config.extension_allowlist),
                 max_file_size_mb=config.max_file_size_mb,
@@ -318,11 +351,15 @@ def run_import(args: argparse.Namespace) -> int:
             pending_bytes = sum(candidate.file_size_bytes for candidate in pending_candidates)
             if pending_candidates:
                 log_event(
-                    "micSync mirror starting "
-                    f"candidates={len(pending_candidates)} bytes={pending_bytes}"
+                    build_event_line(
+                        "micSync mirror starting "
+                        f"candidates={len(pending_candidates)} "
+                        f"total={pending_bytes / 1_000_000:.0f}MB",
+                        kind="event",
+                    )
                 )
             else:
-                log_event("micSync no candidates detected")
+                log_event(build_event_line("micSync no candidates detected", kind="event"))
             if config.notify and pending_candidates:
                 stop_hint = (
                     "copied exact stop command to clipboard"
@@ -340,14 +377,14 @@ def run_import(args: argparse.Namespace) -> int:
 
             any_processed = False
             mirrored_outcomes = []
-            for candidate in pending_candidates:
+            processed_mirror_bytes = 0
+            for mirror_index, candidate in enumerate(pending_candidates, start=1):
                 if signal_stop_requested["value"] or lock.consume_stop_request():
                     summary.stopped = True
-                    log_event("micSync stop requested during mirror stage")
+                    log_event(build_event_line("micSync stop requested during mirror stage", kind="stop"))
                     break
                 any_processed = True
                 seen_volumes[candidate.volume_label] = candidate.volume_root
-                log_event(f"micSync mirroring {candidate.source_path.name}")
                 lock.refresh(f"mirroring {candidate.source_path.name}")
                 try:
                     outcome = mirror_recording_to_raw(
@@ -364,20 +401,42 @@ def run_import(args: argparse.Namespace) -> int:
                     )
                     mirrored_outcomes.append(outcome)
                     summary.total_bytes += outcome.size_bytes
+                    processed_mirror_bytes += outcome.size_bytes
                     summary.warning_count += outcome.warning_count
                     if outcome.status == "duplicate":
                         summary.duplicate_count += 1
                     else:
                         summary.mirrored_count += 1
+                    log_event(
+                        build_progress_line(
+                            action="mirror",
+                            current_index=mirror_index,
+                            total_count=len(pending_candidates),
+                            processed_bytes=processed_mirror_bytes,
+                            total_bytes=pending_bytes,
+                            file_size_bytes=outcome.size_bytes,
+                            path=str(outcome.raw_path.relative_to(config.recordings_root)),
+                        )
+                    )
+                    if outcome.status == "duplicate":
+                        log_event(
+                            build_event_line(
+                                f"micSync duplicate already mirrored {outcome.raw_path.relative_to(config.recordings_root)}",
+                                kind="event",
+                            )
+                        )
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
                     log_event(
-                        "micSync failed "
-                        f"phase=mirror path={candidate.source_path} error={exc}"
+                        build_event_line(
+                            "micSync failed "
+                            f"phase=mirror path={candidate.source_path} error={exc}",
+                            kind="fail",
+                        )
                     )
 
             if summary.stopped:
-                log_event("micSync stopped after mirror phase request")
+                log_event(build_event_line("micSync stopped after mirror phase request", kind="stop"))
             if summary.failed_count == 0 and config.eject and not summary.stopped:
                 for label, volume_root in seen_volumes.items():
                     if label in ejected_labels:
@@ -385,23 +444,30 @@ def run_import(args: argparse.Namespace) -> int:
                     if eject_volume(volume_root):
                         ejected_volumes.append(label)
                         ejected_labels.add(label)
-                        log_event(f"micSync ejected volume {label}")
+                        log_event(build_event_line(f"micSync ejected volume {label}", kind="eject"))
                     else:
-                        log_event(f"micSync failed to eject volume {label}")
+                        log_event(build_event_line(f"micSync failed to eject volume {label}", kind="fail"))
 
-            for (
+            derivation_queue = [
+                _unpack_derivation_queue_item(item)
+                for item in _pending_derivation_queue(config, catalog)
+            ]
+            derivation_total_bytes = sum(
+                size_bytes
+                for _, _, _, _, size_bytes in derivation_queue
+            )
+            processed_normalize_bytes = 0
+            for normalize_index, (
                 source_file_id,
                 raw_path,
                 source_filename,
                 existing_warning_count,
-            ) in _pending_derivation_queue(
-                config, catalog
-            ):
+                source_size_bytes,
+            ) in enumerate(derivation_queue, start=1):
                 if signal_stop_requested["value"] or lock.consume_stop_request():
                     summary.stopped = True
-                    log_event("micSync stop requested during derive stage")
+                    log_event(build_event_line("micSync stop requested during derive stage", kind="stop"))
                     break
-                log_event(f"micSync deriving {source_filename}")
                 lock.refresh(f"deriving {source_filename}")
                 try:
                     derived = derive_mirrored_recording(
@@ -420,35 +486,55 @@ def run_import(args: argparse.Namespace) -> int:
                     summary.warning_count += max(
                         0, derived.warning_count - existing_warning_count
                     )
+                    derived_path = getattr(derived, "derived_path", None)
+                    if isinstance(derived_path, Path):
+                        processed_normalize_bytes += source_size_bytes
+                        log_event(
+                            build_progress_line(
+                                action="normalize",
+                                current_index=normalize_index,
+                                total_count=len(derivation_queue),
+                                processed_bytes=processed_normalize_bytes,
+                                total_bytes=derivation_total_bytes,
+                                file_size_bytes=int(getattr(derived, "size_bytes", source_size_bytes)),
+                                path=str(derived_path.relative_to(config.recordings_root)),
+                            )
+                        )
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
                     log_event(
-                        "micSync failed "
-                        f"phase=derive path={raw_path} error={exc}"
+                        build_event_line(
+                            "micSync failed "
+                            f"phase=derive path={raw_path} error={exc}",
+                            kind="fail",
+                        )
                     )
 
             if summary.stopped:
                 break
             rescan_requested = lock.consume_rescan_request()
             if rescan_requested:
-                log_event("micSync rescan requested; continuing")
+                log_event(build_event_line("micSync rescan requested; continuing", kind="event"))
                 continue
             if any_processed:
-                log_event("micSync run cycle complete; no rescan requested")
+                log_event(build_event_line("micSync run cycle complete; no rescan requested", kind="event"))
                 break
-            log_event("micSync no work processed; exiting")
+            log_event(build_event_line("micSync no work processed; exiting", kind="event"))
             break
 
         elapsed_seconds = int((datetime.now(timezone.utc) - run_started).total_seconds())
         log_event(
-            "summary "
-            f"mirrored={summary.mirrored_count} "
-            f"derived={summary.derived_count} "
-            f"duplicate={summary.duplicate_count} "
-            f"failed={summary.failed_count} "
-            f"warning={summary.warning_count} "
-            f"bytes={summary.total_bytes} "
-            f"elapsed_seconds={elapsed_seconds}",
+            build_event_line(
+                "summary "
+                f"mirrored={summary.mirrored_count} "
+                f"derived={summary.derived_count} "
+                f"duplicate={summary.duplicate_count} "
+                f"failed={summary.failed_count} "
+                f"warning={summary.warning_count} "
+                f"total={summary.total_bytes / 1_000_000:.0f}MB "
+                f"elapsed_seconds={elapsed_seconds}",
+                kind="summary",
+            )
         )
         if config.notify:
             if summary.stopped:

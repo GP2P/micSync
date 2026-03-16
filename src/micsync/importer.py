@@ -15,7 +15,7 @@ from micsync.audio import (
     read_duration_ms,
 )
 from micsync.catalog import Catalog
-from micsync.logging_utils import RunLogger, append_run_log
+from micsync.logging_utils import RunLogger, append_run_log, build_event_line
 from micsync.parser import ParsedRecordingName, parse_physical_mic_id, parse_recording_name
 
 
@@ -201,8 +201,18 @@ def mirror_recording_to_raw(
         error_detail="; ".join(warning_messages) if warning_messages else None,
     )
     for warning_message in warning_messages:
-        emit(f"micSync warning {source_path.name}: {warning_message}")
-    emit(f"micSync {status} {source_path.name} -> {raw_path}")
+        emit(
+            build_event_line(
+                f"{source_path.name}: {warning_message}",
+                kind="warn",
+            )
+        )
+    if log_event is None:
+        emit(
+            build_event_line(
+                f"{status} {source_path.name} -> {raw_path.relative_to(recordings_root)}"
+            )
+        )
     return MirrorOutcome(
         raw_path=raw_path,
         checksum=checksum,
@@ -294,8 +304,14 @@ def derive_mirrored_recording(
             dest_path=derived_root / _derived_relative_path(parsed),
             strategy=derived_outputs_strategy,
         )
-        emit(f"micSync materialized derived {raw_path.name} -> {derived_path}")
-    emit(f"micSync derived {raw_path.name} -> take {take_id} segment {segment_id}")
+        if log_event is None:
+            emit(
+                build_event_line(
+                    f"materialized {raw_path.name} -> {derived_path.relative_to(derived_root.parent)}"
+                )
+            )
+    if log_event is None:
+        emit(build_event_line(f"derived {raw_path.name} -> take {take_id} segment {segment_id}"))
     return ImportOutcome(
         raw_path=raw_path,
         derived_path=derived_path,

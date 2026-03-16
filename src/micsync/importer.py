@@ -145,6 +145,7 @@ def mirror_recording_to_raw(
     source_mount_path: Path,
     source_parent_folder: str,
     volume_label: str | None,
+    hidden: bool = False,
     recordings_root: Path,
     tmp_root: Path,
     catalog: Catalog,
@@ -217,6 +218,7 @@ def mirror_recording_to_raw(
         duration_ms=duration_ms,
         variant=parsed.variant,
         mirror_status=status,
+        hidden=hidden,
         first_seen_at=attempted_at,
         last_attempted_at=attempted_at,
         mirrored_at=attempted_at,
@@ -267,6 +269,7 @@ def derive_mirrored_recording(
     recording_end_at = source_file["recording_end_at"]
     duration_ms = source_file["duration_ms"]
     physical_mic_id = int(source_file["physical_mic_id"])
+    hidden = bool(source_file["hidden"]) if "hidden" in source_file.keys() else False
     warning_messages: list[str] = []
     error_detail = source_file["error_detail"]
     if error_detail:
@@ -298,6 +301,7 @@ def derive_mirrored_recording(
         tx_slot=parsed.tx_slot,
         physical_mic_id=physical_mic_id,
         source_parent_folder=str(source_file["source_parent_folder"]),
+        hidden=hidden,
         health_status="warning" if warning_messages else "ok",
     )
     attempted_at = datetime.now().isoformat(timespec="seconds")
@@ -312,6 +316,7 @@ def derive_mirrored_recording(
         physical_mic_id=physical_mic_id,
         source_parent_folder=str(source_file["source_parent_folder"]),
         duration_ms=duration_ms,
+        hidden=hidden,
         first_seen_at=attempted_at,
         last_attempted_at=attempted_at,
         completed_at=attempted_at,
@@ -321,7 +326,7 @@ def derive_mirrored_recording(
     )
     catalog.assign_source_file_to_segment(source_file_id=source_file_id, segment_id=segment_id)
     derived_path: Path | None = None
-    if enable_derived_outputs and derived_root is not None:
+    if enable_derived_outputs and derived_root is not None and not hidden:
         derived_path = materialize_derived_file(
             source_path=raw_path,
             dest_path=derived_root / _derived_relative_path(parsed),
@@ -354,6 +359,7 @@ def import_recording(
     source_mount_path: Path,
     source_parent_folder: str,
     volume_label: str | None,
+    hidden: bool = False,
     recordings_root: Path,
     tmp_root: Path,
     catalog: Catalog,
@@ -368,6 +374,7 @@ def import_recording(
         source_mount_path=source_mount_path,
         source_parent_folder=source_parent_folder,
         volume_label=volume_label,
+        hidden=hidden,
         recordings_root=recordings_root,
         tmp_root=tmp_root,
         catalog=catalog,

@@ -65,7 +65,7 @@ class AudioTest(unittest.TestCase):
             self.assertEqual(len(candidates), 1)
             self.assertEqual(candidates[0].volume_root, included_volume)
 
-    def test_scan_candidates_only_descends_into_tx_mic_folders_on_volume_root(self) -> None:
+    def test_scan_candidates_marks_trash_paths_hidden(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             volumes_root = Path(tmpdir)
             volume = volumes_root / "MIC 01"
@@ -80,7 +80,7 @@ class AudioTest(unittest.TestCase):
                 trash_dir
                 / "TX_MIC999_20260308_143058"
                 / "TX02_MIC999_20260608_112048_orig.wav"
-            ).write_bytes(b"skip")
+            ).write_bytes(b"hidden")
 
             candidates = scan_candidates(
                 allow_extensions={".wav"},
@@ -88,8 +88,11 @@ class AudioTest(unittest.TestCase):
                 volumes_root=volumes_root,
             )
 
-            self.assertEqual(len(candidates), 1)
-            self.assertEqual(candidates[0].source_parent_folder, "TX_MIC001_20260308_143058")
+            self.assertEqual(len(candidates), 2)
+            visible_candidate = next(candidate for candidate in candidates if not candidate.hidden)
+            hidden_candidate = next(candidate for candidate in candidates if candidate.hidden)
+            self.assertEqual(visible_candidate.source_parent_folder, "TX_MIC001_20260308_143058")
+            self.assertEqual(hidden_candidate.source_parent_folder, "TX_MIC999_20260308_143058")
 
     def test_materialize_derived_file_falls_back_to_copy_when_clone_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

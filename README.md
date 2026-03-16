@@ -21,6 +21,7 @@ The current design assumes:
 - Groups adjacent 30-minute segments into the same `take` when timing is continuous enough
 - Handles duplicate Shortcut triggers and frozen processes with a singleton lock and rescan marker
 - Supports resumable runs and duplicate detection
+- Detects supported macOS/Linux/Windows trash paths and marks those recordings hidden in the catalog
 - Sends macOS notifications
 - Can auto-eject source volumes after a clean verified mirror stage
 - Can optionally create normalized browse copies under `derived/`
@@ -65,6 +66,7 @@ source_files -> segments -> takes
 - `source_files`: one row per mirrored raw file
 - `segments`: one recording chunk, can have one or more variants like `_orig` and `_edit`
 - `takes`: one logical grouped recording for timeline and browsing, since DJI Mic automatically cuts recordings into 30min chunks
+- `hidden`: a catalog visibility flag used when a source file came from a device trash path; hidden rows stay in the DB but should be excluded by default in UI layers
 
 Future enrichment tables such as transcripts, summaries, or tags should attach to the right canonical level:
 
@@ -82,6 +84,7 @@ Each run has two stages.
 2. Derive stage
    `micSync` reads the local mirrored raw files, parses timestamps and variants, updates `segments` and `takes`, and optionally generates normalized files under `derived/`.
    Pending derivations are processed from the database in ascending `recording_start_at` order so forward-only grouping follows time instead of raw path order.
+   Files detected under supported device trash paths still derive DB records, but they are marked `hidden` and do not generate normalized outputs.
 
 The important boundary is that the raw mirror becomes the local system of record. Once a file has been mirrored and verified, the database and optional derived outputs can be rebuilt without needing the mic to remain connected.
 

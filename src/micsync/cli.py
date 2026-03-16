@@ -392,6 +392,7 @@ def run_import(args: argparse.Namespace) -> int:
                         source_mount_path=candidate.volume_root,
                         source_parent_folder=candidate.source_parent_folder,
                         volume_label=candidate.volume_label,
+                        hidden=candidate.hidden,
                         recordings_root=config.recordings_root,
                         tmp_root=config.recordings_tmp_root,
                         catalog=catalog,

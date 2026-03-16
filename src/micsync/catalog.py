@@ -37,6 +37,7 @@ class Catalog:
                     tx_slot text not null,
                     physical_mic_id integer not null default 0,
                     source_parent_folder text,
+                    hidden integer not null default 0,
                     first_imported_at text not null default (datetime('now')),
                     last_updated_at text not null default (datetime('now')),
                     health_status text not null default 'ok'
@@ -54,6 +55,7 @@ class Catalog:
                     physical_mic_id integer not null default 0,
                     source_parent_folder text,
                     duration_ms integer,
+                    hidden integer not null default 0,
                     first_seen_at text,
                     last_attempted_at text,
                     completed_at text,
@@ -82,6 +84,7 @@ class Catalog:
                     duration_ms integer,
                     variant text,
                     mirror_status text,
+                    hidden integer not null default 0,
                     first_seen_at text,
                     last_attempted_at text,
                     mirrored_at text,
@@ -90,6 +93,23 @@ class Catalog:
                 );
                 """
             )
+            self._ensure_column(conn, table_name="takes", column_name="hidden", column_def="integer not null default 0")
+            self._ensure_column(conn, table_name="segments", column_name="hidden", column_def="integer not null default 0")
+            self._ensure_column(conn, table_name="source_files", column_name="hidden", column_def="integer not null default 0")
+
+    def _ensure_column(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table_name: str,
+        column_name: str,
+        column_def: str,
+    ) -> None:
+        rows = conn.execute(f"pragma table_info({table_name})").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        if column_name in existing_columns:
+            return
+        conn.execute(f"alter table {table_name} add column {column_name} {column_def}")
 
     def upsert_take(
         self,
@@ -100,6 +120,7 @@ class Catalog:
         tx_slot: str,
         physical_mic_id: int,
         source_parent_folder: str,
+        hidden: bool = False,
         health_status: str = "ok",
     ) -> int:
         with self._connect() as conn:
@@ -112,8 +133,9 @@ class Catalog:
                     tx_slot,
                     physical_mic_id,
                     source_parent_folder,
+                    hidden,
                     health_status
-                ) values (?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(take_key) do update set
                     take_start_at=case
                         when excluded.take_start_at < takes.take_start_at then excluded.take_start_at
@@ -128,6 +150,7 @@ class Catalog:
                     tx_slot=excluded.tx_slot,
                     physical_mic_id=excluded.physical_mic_id,
                     source_parent_folder=excluded.source_parent_folder,
+                    hidden=excluded.hidden,
                     health_status=case
                         when excluded.health_status != 'ok' then excluded.health_status
                         else takes.health_status
@@ -141,6 +164,7 @@ class Catalog:
                     tx_slot,
                     physical_mic_id,
                     source_parent_folder,
+                    int(hidden),
                     health_status,
                 ),
             )
@@ -165,6 +189,7 @@ class Catalog:
         physical_mic_id: int,
         source_parent_folder: str,
         duration_ms: int | None,
+        hidden: bool = False,
         first_seen_at: str,
         last_attempted_at: str,
         completed_at: str | None,
@@ -186,13 +211,14 @@ class Catalog:
                     physical_mic_id,
                     source_parent_folder,
                     duration_ms,
+                    hidden,
                     first_seen_at,
                     last_attempted_at,
                     completed_at,
                     health_status,
                     anomaly_code,
                     anomaly_detail
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(segment_key) do update set
                     take_id=excluded.take_id,
                     segment_index=excluded.segment_index,
@@ -203,6 +229,7 @@ class Catalog:
                     physical_mic_id=excluded.physical_mic_id,
                     source_parent_folder=excluded.source_parent_folder,
                     duration_ms=coalesce(excluded.duration_ms, segments.duration_ms),
+                    hidden=excluded.hidden,
                     first_seen_at=coalesce(segments.first_seen_at, excluded.first_seen_at),
                     last_attempted_at=excluded.last_attempted_at,
                     completed_at=coalesce(excluded.completed_at, segments.completed_at),
@@ -225,6 +252,7 @@ class Catalog:
                     physical_mic_id,
                     source_parent_folder,
                     duration_ms,
+                    int(hidden),
                     first_seen_at,
                     last_attempted_at,
                     completed_at,
@@ -292,6 +320,7 @@ class Catalog:
         duration_ms: int | None,
         variant: str | None,
         mirror_status: str,
+        hidden: bool = False,
         first_seen_at: str | None,
         last_attempted_at: str | None,
         mirrored_at: str | None,
@@ -319,12 +348,13 @@ class Catalog:
                     duration_ms,
                     variant,
                     mirror_status,
+                    hidden,
                     first_seen_at,
                     last_attempted_at,
                     mirrored_at,
                     error_phase,
                     error_detail
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(source_key) do update set
                     segment_id=coalesce(excluded.segment_id, source_files.segment_id),
                     source_volume_label=excluded.source_volume_label,
@@ -342,6 +372,7 @@ class Catalog:
                     duration_ms=coalesce(excluded.duration_ms, source_files.duration_ms),
                     variant=excluded.variant,
                     mirror_status=excluded.mirror_status,
+                    hidden=excluded.hidden,
                     first_seen_at=coalesce(source_files.first_seen_at, excluded.first_seen_at),
                     last_attempted_at=excluded.last_attempted_at,
                     mirrored_at=coalesce(excluded.mirrored_at, source_files.mirrored_at),
@@ -366,6 +397,7 @@ class Catalog:
                     duration_ms,
                     variant,
                     mirror_status,
+                    int(hidden),
                     first_seen_at,
                     last_attempted_at,
                     mirrored_at,
@@ -374,11 +406,17 @@ class Catalog:
                 ),
             )
             row = conn.execute(
-                "select id from source_files where source_key = ?",
+                "select id, segment_id from source_files where source_key = ?",
                 (source_key,),
             ).fetchone()
             if row is None:
                 raise RuntimeError("source file upsert failed")
+            segment_id = row["segment_id"]
+            if segment_id is not None:
+                self._refresh_segment_and_take_hidden_flags(
+                    conn,
+                    segment_id=int(segment_id),
+                )
             return int(row["id"])
 
     def fetch_take(self, take_id: int) -> sqlite3.Row:
@@ -429,6 +467,62 @@ class Catalog:
             ).fetchall()
             return list(rows)
 
+    def _refresh_segment_and_take_hidden_flags(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        segment_id: int,
+    ) -> None:
+        conn.execute(
+            """
+            update segments
+            set hidden=case
+                when exists(
+                    select 1
+                    from source_files
+                    where segment_id = ?
+                      and coalesce(hidden, 0) = 0
+                ) then 0
+                when exists(
+                    select 1
+                    from source_files
+                    where segment_id = ?
+                ) then 1
+                else 0
+            end
+            where id = ?
+            """,
+            (segment_id, segment_id, segment_id),
+        )
+        row = conn.execute(
+            "select take_id from segments where id = ?",
+            (segment_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(segment_id)
+        take_id = int(row["take_id"])
+        conn.execute(
+            """
+            update takes
+            set hidden=case
+                when exists(
+                    select 1
+                    from segments
+                    where take_id = ?
+                      and coalesce(hidden, 0) = 0
+                ) then 0
+                when exists(
+                    select 1
+                    from segments
+                    where take_id = ?
+                ) then 1
+                else 0
+            end
+            where id = ?
+            """,
+            (take_id, take_id, take_id),
+        )
+
     def assign_source_file_to_segment(self, *, source_file_id: int, segment_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -439,6 +533,7 @@ class Catalog:
                 """,
                 (segment_id, source_file_id),
             )
+            self._refresh_segment_and_take_hidden_flags(conn, segment_id=segment_id)
 
     def count_rows(self, table_name: str) -> int:
         with self._connect() as conn:

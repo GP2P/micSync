@@ -270,6 +270,48 @@ class ImporterTest(unittest.TestCase):
             )
             self.assertTrue(derived.derived_path.exists())
 
+    def test_hidden_source_derives_hidden_metadata_without_normalized_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_mount = root / "MIC 01"
+            source_dir = source_mount / ".Trashes" / "TX_MIC001_20260308_143058"
+            source_dir.mkdir(parents=True)
+            source_file = source_dir / "TX02_MIC001_20260608_112048_orig.wav"
+            source_file.write_bytes(b"not-a-real-wav")
+            catalog = Catalog(root / "recordings" / "audio" / "db" / "recordings.sqlite3")
+
+            mirrored = mirror_recording_to_raw(
+                source_path=source_file,
+                source_mount_path=source_mount,
+                source_parent_folder="TX_MIC001_20260308_143058",
+                volume_label="MIC 01",
+                recordings_root=root / "recordings" / "audio",
+                tmp_root=root / "recordings" / "audio" / "tmp",
+                catalog=catalog,
+                log_path=root / "micSync" / "logs" / "runs.log",
+                hidden=True,
+            )
+
+            derived = derive_mirrored_recording(
+                raw_path=mirrored.raw_path,
+                source_file_id=mirrored.source_file_id,
+                catalog=catalog,
+                log_path=root / "micSync" / "logs" / "runs.log",
+                enable_derived_outputs=True,
+                derived_root=root / "recordings" / "audio" / "derived",
+                derived_outputs_strategy="copy_only",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+            )
+
+            source_file_row = catalog.fetch_source_file(mirrored.source_file_id)
+            segment_row = catalog.fetch_segment(derived.segment_id)
+            take_row = catalog.fetch_take(derived.take_id)
+            self.assertEqual(source_file_row["hidden"], 1)
+            self.assertEqual(segment_row["hidden"], 1)
+            self.assertEqual(take_row["hidden"], 1)
+            self.assertIsNone(derived.derived_path)
+
     def test_orig_and_edit_share_same_take_and_segment(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

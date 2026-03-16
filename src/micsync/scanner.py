@@ -7,6 +7,9 @@ import os
 from micsync.parser import parse_recording_name
 
 
+TRASH_DIR_NAMES = {".Trashes", ".Trash", "$RECYCLE.BIN"}
+
+
 def should_include_file(
     *,
     path: Path,
@@ -28,6 +31,22 @@ class CandidateFile:
     source_path: Path
     source_parent_folder: str
     file_size_bytes: int
+    hidden: bool = False
+
+
+def _is_trash_dir_name(dirname: str) -> bool:
+    return (
+        dirname in TRASH_DIR_NAMES
+        or dirname.startswith(".Trash-")
+    )
+
+
+def _path_is_hidden_on_device(*, volume_root: Path, source_path: Path) -> bool:
+    try:
+        relative_parts = source_path.relative_to(volume_root).parts[:-1]
+    except ValueError:
+        return False
+    return any(_is_trash_dir_name(part) for part in relative_parts)
 
 
 def scan_candidates(
@@ -55,7 +74,9 @@ def scan_candidates(
             root_path = Path(root)
             if root_path == volume_root:
                 dirnames[:] = sorted(
-                    dirname for dirname in dirnames if dirname.startswith("TX_MIC")
+                    dirname
+                    for dirname in dirnames
+                    if dirname.startswith("TX_MIC") or _is_trash_dir_name(dirname)
                 )
             for filename in files:
                 path = root_path / filename
@@ -83,6 +104,10 @@ def scan_candidates(
                         source_path=path,
                         source_parent_folder=path.parent.name,
                         file_size_bytes=stat.st_size,
+                        hidden=_path_is_hidden_on_device(
+                            volume_root=volume_root,
+                            source_path=path,
+                        ),
                     )
                 )
     return candidates

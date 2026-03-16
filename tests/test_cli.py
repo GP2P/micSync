@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -60,18 +61,65 @@ class CliSmokeTest(unittest.TestCase):
         self.assertIn("usage", result.stdout.lower())
 
     def test_standalone_wrapper_stop_command_exits_successfully(self) -> None:
-        env = os.environ.copy()
-        env.pop("NEXUS_DEPLOY_ROOT", None)
-        env.pop("NEXUS_DATA_ROOT", None)
-        result = subprocess.run(
-            [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--stop"],
-            cwd=SERVICE_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("micSync", result.stdout)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = os.environ.copy()
+            env.pop("NEXUS_DEPLOY_ROOT", None)
+            env.pop("NEXUS_DATA_ROOT", None)
+            env["HOME"] = tmpdir
+            result = subprocess.run(
+                [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--stop"],
+                cwd=SERVICE_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("micSync", result.stdout)
+
+    def test_standalone_wrapper_uses_home_env_file_for_data_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            home_dir = tmp_root / "home"
+            data_root = tmp_root / "nexus-data"
+            config_dir = home_dir / ".config" / "nexus"
+            run_dir = data_root / "micSync" / "run"
+            config_dir.mkdir(parents=True)
+            run_dir.mkdir(parents=True)
+            (config_dir / "env.sh").write_text(
+                f'export NEXUS_DATA_ROOT="{data_root}"\n',
+                encoding="utf-8",
+            )
+            (run_dir / "active.lock").write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "hostname": "test-host",
+                        "started_at": "2026-03-15T00:00:00+00:00",
+                        "last_heartbeat_at": "2999-01-01T00:00:00+00:00",
+                        "phase": "test",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.pop("NEXUS_DEPLOY_ROOT", None)
+            env.pop("NEXUS_DATA_ROOT", None)
+            env["HOME"] = str(home_dir)
+            result = subprocess.run(
+                [
+                    str(SERVICE_ROOT / "scripts" / "micSync.sh"),
+                    "--stop",
+                    "--notify",
+                    "false",
+                ],
+                cwd=SERVICE_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("micSync stop requested", result.stdout)
 
 
 class CliRunTest(unittest.TestCase):

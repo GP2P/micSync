@@ -152,6 +152,7 @@ It sets these environment variables for the process:
 Defaults:
 
 - `NEXUS_DEPLOY_ROOT=<service root inferred from ./scripts/micSync.sh>`
+- `NEXUS_DATA_ROOT=<from $HOME/.config/nexus/env.sh if present>`
 - `NEXUS_DATA_ROOT=$NEXUS_DEPLOY_ROOT/data`
 
 Example bounded local run with explicit roots:
@@ -178,6 +179,7 @@ Graceful stop request:
 ```
 
 The wrapper infers its root from its own location on disk, not from the caller's current working directory.
+If `NEXUS_DATA_ROOT` is not already set and `$HOME/.config/nexus/env.sh` exists, the wrapper will source that file before falling back to `$NEXUS_DEPLOY_ROOT/data`.
 
 If you are integrating `micSync` into a larger deployment that already sets `NEXUS_DEPLOY_ROOT` and `NEXUS_DATA_ROOT`, this wrapper will respect those existing values.
 

@@ -1,8 +1,9 @@
 import unittest
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
-from micsync.audio import derive_end_time
+from micsync.audio import derive_end_time, materialize_derived_file
 from micsync.scanner import scan_candidates, should_include_file
 
 
@@ -42,3 +43,21 @@ class AudioTest(unittest.TestCase):
 
             self.assertEqual(len(candidates), 1)
             self.assertEqual(candidates[0].volume_label, "MIC 01")
+
+    def test_materialize_derived_file_falls_back_to_copy_when_clone_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_path = root / "raw.wav"
+            dest_path = root / "derived" / "normalized.wav"
+            source_path.write_bytes(b"audio-bytes")
+
+            with patch("micsync.audio.subprocess.run") as run_mock:
+                run_mock.return_value.returncode = 1
+                result = materialize_derived_file(
+                    source_path=source_path,
+                    dest_path=dest_path,
+                    strategy="clone_then_copy",
+                )
+
+            self.assertEqual(result, dest_path)
+            self.assertEqual(dest_path.read_bytes(), b"audio-bytes")

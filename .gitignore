@@ -1,0 +1,21 @@
+# Local Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# Local packaging / virtualenv outputs
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local editor / OS noise
+.DS_Store
+
+# Repo-local fallback runtime state
+# Runtime state belongs under $NEXUS_DATA_ROOT, but the wrapper can fall back
+# to ./data when no external root is configured.
+data/

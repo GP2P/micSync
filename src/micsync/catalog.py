@@ -91,6 +91,21 @@ class Catalog:
                     error_phase text,
                     error_detail text
                 );
+
+                create table if not exists anomalies (
+                    id integer primary key,
+                    run_id text not null,
+                    phase text not null,
+                    severity text not null,
+                    code text not null,
+                    message text not null,
+                    source_file_id integer references source_files(id),
+                    raw_relative_path text,
+                    volume_label text,
+                    created_at text not null default (datetime('now')),
+                    acknowledged_at text,
+                    resolved_at text
+                );
                 """
             )
             self._ensure_column(conn, table_name="takes", column_name="hidden", column_def="integer not null default 0")
@@ -542,6 +557,56 @@ class Catalog:
                 (segment_id, source_file_id),
             )
             self._refresh_segment_and_take_hidden_flags(conn, segment_id=segment_id)
+
+    def insert_anomaly(
+        self,
+        *,
+        run_id: str,
+        phase: str,
+        severity: str,
+        code: str,
+        message: str,
+        source_file_id: int | None = None,
+        raw_relative_path: str | None = None,
+        volume_label: str | None = None,
+    ) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                insert into anomalies (
+                    run_id,
+                    phase,
+                    severity,
+                    code,
+                    message,
+                    source_file_id,
+                    raw_relative_path,
+                    volume_label
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    phase,
+                    severity,
+                    code,
+                    message,
+                    source_file_id,
+                    raw_relative_path,
+                    volume_label,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def fetch_anomalies(self) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select *
+                from anomalies
+                order by id asc
+                """
+            ).fetchall()
+            return list(rows)
 
     def count_rows(self, table_name: str) -> int:
         with self._connect() as conn:

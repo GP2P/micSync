@@ -27,6 +27,7 @@ class MirrorOutcome:
     status: str
     source_file_id: int
     warning_count: int
+    warning_messages: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class ImportOutcome:
     segment_id: int
     source_file_id: int
     warning_count: int
+    warning_messages: tuple[str, ...] = ()
 
 
 def compute_file_checksum(path: Path) -> str:
@@ -305,6 +307,7 @@ def mirror_recording_to_raw(
         status=status,
         source_file_id=source_file_id,
         warning_count=len(warning_messages),
+        warning_messages=tuple(warning_messages),
     )
 
 
@@ -410,6 +413,7 @@ def derive_mirrored_recording(
         segment_id=segment_id,
         source_file_id=source_file_id,
         warning_count=len(warning_messages),
+        warning_messages=tuple(warning_messages),
     )
 
 

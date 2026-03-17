@@ -32,6 +32,7 @@ from micsync.notify import (
     build_start_message,
     build_stopped_message,
     copy_to_clipboard,
+    open_log_in_console,
     send_notification,
 )
 from micsync.scanner import scan_candidates
@@ -332,6 +333,40 @@ def run_import(args: argparse.Namespace) -> int:
             send_notification(title=title, message=message)
             log_event(build_event_line(f"micSync sent notification title={title}", kind="event"))
 
+        def record_anomaly(
+            *,
+            phase: str,
+            severity: str,
+            code: str,
+            message: str,
+            source_file_id: int | None = None,
+            raw_relative_path: str | None = None,
+            volume_label: str | None = None,
+            title: str | None = None,
+        ) -> None:
+            catalog.insert_anomaly(
+                run_id=run_id,
+                phase=phase,
+                severity=severity,
+                code=code,
+                message=message,
+                source_file_id=source_file_id,
+                raw_relative_path=raw_relative_path,
+                volume_label=volume_label,
+            )
+            if not config.notify:
+                return
+            notification_title = title or (
+                "micSync failure" if severity == "fail" else "micSync warning"
+            )
+            notification_message = message
+            if severity == "fail":
+                if open_log_in_console(log_path):
+                    notification_message = f"{message} | opened log in Console"
+                else:
+                    notification_message = f"{message} | log: {log_path}"
+            emit_notification(title=notification_title, message=notification_message)
+
         log_event(
             build_event_line(
                 "micSync run started "
@@ -490,11 +525,20 @@ def run_import(args: argparse.Namespace) -> int:
                     log_event(build_event_line("micSync copied stop command to clipboard", kind="event"))
                 else:
                     stop_hint = stop_command
+                    warning_message = "failed to copy stop command to clipboard; using literal command"
+                    summary.warning_count += 1
                     log_event(
                         build_event_line(
-                            "micSync failed to copy stop command to clipboard; using literal command",
+                            f"micSync {warning_message}",
                             kind="warn",
                         )
+                    )
+                    record_anomaly(
+                        phase="mirror_start",
+                        severity="warning",
+                        code="clipboard_failure",
+                        message=warning_message,
+                        title="micSync warning",
                     )
                 emit_notification(
                     title="micSync mirror starting",
@@ -552,14 +596,41 @@ def run_import(args: argparse.Namespace) -> int:
                                 kind="event",
                             )
                         )
+                    for warning_message in outcome.warning_messages:
+                        anomaly_code = (
+                            "zero_byte_source"
+                            if "zero-byte source file" in warning_message
+                            else "mirror_warning"
+                        )
+                        record_anomaly(
+                            phase="mirror",
+                            severity="warning",
+                            code=anomaly_code,
+                            message=warning_message,
+                            source_file_id=outcome.source_file_id,
+                            raw_relative_path=str(
+                                outcome.raw_path.relative_to(config.recordings_root)
+                            ),
+                            volume_label=candidate.volume_label,
+                        )
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
+                    failure_message = (
+                        "mirror failed "
+                        f"path={candidate.source_path} error={exc}"
+                    )
                     log_event(
                         build_event_line(
-                            "micSync failed "
-                            f"phase=mirror path={candidate.source_path} error={exc}",
+                            f"micSync {failure_message}",
                             kind="fail",
                         )
+                    )
+                    record_anomaly(
+                        phase="mirror",
+                        severity="fail",
+                        code="mirror_failed",
+                        message=failure_message,
+                        volume_label=candidate.volume_label,
                     )
 
             if summary.stopped:
@@ -630,14 +701,37 @@ def run_import(args: argparse.Namespace) -> int:
                             )
                         )
                     processed_derivations += 1
+                    derived_warning_messages = getattr(derived, "warning_messages", ())
+                    if not isinstance(derived_warning_messages, (list, tuple)):
+                        derived_warning_messages = ()
+                    new_warning_messages = list(
+                        derived_warning_messages[existing_warning_count:]
+                    )
+                    for warning_message in new_warning_messages:
+                        record_anomaly(
+                            phase="derive",
+                            severity="warning",
+                            code="derive_warning",
+                            message=warning_message,
+                            source_file_id=source_file_id,
+                            raw_relative_path=str(raw_path.relative_to(config.recordings_root)),
+                        )
                 except Exception as exc:  # broad on purpose for run-level robustness
                     summary.failed_count += 1
+                    failure_message = f"derive failed path={raw_path} error={exc}"
                     log_event(
                         build_event_line(
-                            "micSync failed "
-                            f"phase=derive path={raw_path} error={exc}",
+                            f"micSync {failure_message}",
                             kind="fail",
                         )
+                    )
+                    record_anomaly(
+                        phase="derive",
+                        severity="fail",
+                        code="derive_failed",
+                        message=failure_message,
+                        source_file_id=source_file_id,
+                        raw_relative_path=str(raw_path.relative_to(config.recordings_root)),
                     )
             if not summary.stopped:
                 log_event(
@@ -692,18 +786,21 @@ def run_import(args: argparse.Namespace) -> int:
                                     kind="warn",
                                 )
                             )
-                            if config.notify:
-                                emit_notification(
-                                    title="micSync eject warning",
-                                    message=(
-                                        f"{label} failed to eject"
-                                        + (
-                                            f" | {eject_result.detail}"
-                                            if eject_result.detail
-                                            else ""
-                                        )
-                                    ),
-                                )
+                            record_anomaly(
+                                phase="eject",
+                                severity="warning",
+                                code="eject_failed",
+                                message=(
+                                    f"{label} failed to eject"
+                                    + (
+                                        f" | {eject_result.detail}"
+                                        if eject_result.detail
+                                        else ""
+                                    )
+                                ),
+                                volume_label=label,
+                                title="micSync eject warning",
+                            )
                 log_event(build_event_line("micSync run cycle complete after stable rescan", kind="event"))
                 break
 
@@ -735,11 +832,14 @@ def run_import(args: argparse.Namespace) -> int:
                 if label not in warned_attached_labels:
                     summary.warning_count += 1
                 log_event(build_event_line(f"micSync volume still attached {label}", kind="warn"))
-                if config.notify:
-                    emit_notification(
-                        title="micSync volume still attached",
-                        message=f"{label} is still attached after import",
-                    )
+                record_anomaly(
+                    phase="run_complete",
+                    severity="warning",
+                    code="volume_still_attached",
+                    message=f"{label} is still attached after import",
+                    volume_label=label,
+                    title="micSync volume still attached",
+                )
 
         elapsed_seconds = int((datetime.now(timezone.utc) - run_started).total_seconds())
         log_event(

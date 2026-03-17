@@ -238,6 +238,30 @@ class CatalogTest(unittest.TestCase):
             row = catalog.fetch_source_file(source_file_id)
             self.assertIsNone(row["segment_id"])
 
+    def test_insert_anomaly_persists_event_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "recordings.sqlite3"
+            catalog = Catalog(db_path)
+
+            anomaly_id = catalog.insert_anomaly(
+                run_id="run-123",
+                phase="derive",
+                severity="fail",
+                code="derive_failed",
+                message="derive failed for raw/MIC_01/A/file.wav",
+                source_file_id=7,
+                raw_relative_path="raw/MIC_01/A/file.wav",
+                volume_label="MIC 01",
+            )
+
+            rows = catalog.fetch_anomalies()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], anomaly_id)
+        self.assertEqual(rows[0]["run_id"], "run-123")
+        self.assertEqual(rows[0]["severity"], "fail")
+        self.assertEqual(rows[0]["code"], "derive_failed")
+
     def test_pending_source_files_for_derivation_are_ordered_by_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "recordings.sqlite3"

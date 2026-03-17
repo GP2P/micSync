@@ -123,3 +123,13 @@ def send_notification(*, title: str, message: str) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def open_log_in_console(log_path: Path) -> bool:
+    result = subprocess.run(
+        ["open", "-a", "Console", str(log_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0

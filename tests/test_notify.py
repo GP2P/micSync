@@ -9,6 +9,7 @@ from micsync.notify import (
     build_start_message,
     build_stopped_message,
     copy_to_clipboard,
+    open_log_in_console,
 )
 
 
@@ -98,4 +99,10 @@ class NotifyTest(unittest.TestCase):
     def test_copy_to_clipboard_returns_true_on_success(self, mock_run) -> None:
         mock_run.return_value.returncode = 0
         self.assertTrue(copy_to_clipboard("hello"))
+        mock_run.assert_called_once()
+
+    @patch("micsync.notify.subprocess.run")
+    def test_open_log_in_console_returns_true_on_success(self, mock_run) -> None:
+        mock_run.return_value.returncode = 0
+        self.assertTrue(open_log_in_console(Path("/tmp/runs.log")))
         mock_run.assert_called_once()

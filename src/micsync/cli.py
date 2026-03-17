@@ -42,10 +42,14 @@ class RunSummary:
     mirrored_count: int = 0
     derived_count: int = 0
     duplicate_count: int = 0
+    rescan_existing_count: int = 0
     failed_count: int = 0
     warning_count: int = 0
     total_bytes: int = 0
     stopped: bool = False
+
+
+MAX_CONFIRMATION_RESCANS = 5
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -246,6 +250,12 @@ def _planned_scan_volume_roots(source_volumes: list[Path]) -> list[Path]:
     )
 
 
+def _currently_attached_volume_roots(source_volumes: list[Path]) -> list[Path]:
+    if source_volumes:
+        return [path for path in source_volumes if path.is_dir()]
+    return _planned_scan_volume_roots(source_volumes)
+
+
 def run_import(args: argparse.Namespace) -> int:
     config = _load_config(args)
     run_root = config.runtime_root / "run"
@@ -298,7 +308,6 @@ def run_import(args: argparse.Namespace) -> int:
     seen_volumes: dict[str, Path] = {}
     summary = RunSummary()
     ejected_volumes: list[str] = []
-    ejected_labels: set[str] = set()
     signal_stop_requested = {"value": False}
     source_volumes = _resolve_source_volumes(getattr(args, "source_volume", None))
 
@@ -348,7 +357,10 @@ def run_import(args: argparse.Namespace) -> int:
         )
         if acquired.recovered_stale_lock:
             log_event(build_event_line("micSync recovered stale lock", kind="lock"))
+        pass_index = 0
+        completed_rescans = 0
         while True:
+            is_rescan_pass = pass_index > 0
             if signal_stop_requested["value"] or lock.consume_stop_request():
                 summary.stopped = True
                 log_event(build_event_line("micSync stop requested before scan", kind="stop"))
@@ -387,6 +399,8 @@ def run_import(args: argparse.Namespace) -> int:
                 on_volume_complete=on_volume_complete,
             )
             pending_candidates = [c for c in candidates if c.volume_root.name not in {"Macintosh HD"}]
+            for candidate in pending_candidates:
+                seen_volumes[candidate.volume_label] = candidate.volume_root
             log_event(
                 build_event_line(
                     f"micSync scan complete candidates={len(pending_candidates)} volumes={len(scan_volume_roots)}",
@@ -426,7 +440,10 @@ def run_import(args: argparse.Namespace) -> int:
                     continue
                 duplicate_only_volumes[candidate.volume_label] = candidate.volume_root
             pending_candidates = mirror_candidates
-            summary.duplicate_count += len(preexisting_duplicates)
+            if is_rescan_pass:
+                summary.rescan_existing_count = len(preexisting_duplicates)
+            else:
+                summary.duplicate_count += len(preexisting_duplicates)
             log_event(
                 build_event_line(
                     "micSync duplicate preflight complete "
@@ -449,20 +466,19 @@ def run_import(args: argparse.Namespace) -> int:
                 )
             else:
                 log_event(build_event_line("micSync no candidates detected", kind="event"))
-            if config.notify and (pending_candidates or preexisting_duplicates):
+            if config.notify and pending_candidates:
                 stop_hint = None
-                if pending_candidates:
-                    if copy_to_clipboard(stop_command):
-                        stop_hint = "copied exact stop command to clipboard"
-                        log_event(build_event_line("micSync copied stop command to clipboard", kind="event"))
-                    else:
-                        stop_hint = stop_command
-                        log_event(
-                            build_event_line(
-                                "micSync failed to copy stop command to clipboard; using literal command",
-                                kind="warn",
-                            )
+                if copy_to_clipboard(stop_command):
+                    stop_hint = "copied exact stop command to clipboard"
+                    log_event(build_event_line("micSync copied stop command to clipboard", kind="event"))
+                else:
+                    stop_hint = stop_command
+                    log_event(
+                        build_event_line(
+                            "micSync failed to copy stop command to clipboard; using literal command",
+                            kind="warn",
                         )
+                    )
                 emit_notification(
                     title="micSync mirror starting",
                     message=build_start_message(
@@ -472,31 +488,12 @@ def run_import(args: argparse.Namespace) -> int:
                         stop_hint=stop_hint,
                     ),
                 )
-            if summary.failed_count == 0 and config.eject and not summary.stopped:
-                for label, volume_root in duplicate_only_volumes.items():
-                    if label in ejected_labels:
-                        continue
-                    log_event(
-                        build_event_line(
-                            f"micSync scheduling immediate eject label={label}",
-                            kind="event",
-                        )
-                    )
-                    if eject_volume(volume_root):
-                        ejected_volumes.append(label)
-                        ejected_labels.add(label)
-                        log_event(build_event_line(f"micSync ejected volume {label}", kind="eject"))
-                    else:
-                        log_event(build_event_line(f"micSync failed to eject volume {label}", kind="fail"))
-
-            any_processed = bool(preexisting_duplicates)
             processed_mirror_bytes = 0
             for mirror_index, candidate in enumerate(pending_candidates, start=1):
                 if signal_stop_requested["value"] or lock.consume_stop_request():
                     summary.stopped = True
                     log_event(build_event_line("micSync stop requested during mirror stage", kind="stop"))
                     break
-                any_processed = True
                 seen_volumes[candidate.volume_label] = candidate.volume_root
                 lock.refresh(f"mirroring {candidate.source_path.name}")
                 try:
@@ -550,22 +547,6 @@ def run_import(args: argparse.Namespace) -> int:
 
             if summary.stopped:
                 log_event(build_event_line("micSync stopped after mirror phase request", kind="stop"))
-            if summary.failed_count == 0 and config.eject and not summary.stopped:
-                for label, volume_root in seen_volumes.items():
-                    if label in ejected_labels:
-                        continue
-                    log_event(
-                        build_event_line(
-                            f"micSync scheduling post-mirror eject label={label}",
-                            kind="event",
-                        )
-                    )
-                    if eject_volume(volume_root):
-                        ejected_volumes.append(label)
-                        ejected_labels.add(label)
-                        log_event(build_event_line(f"micSync ejected volume {label}", kind="eject"))
-                    else:
-                        log_event(build_event_line(f"micSync failed to eject volume {label}", kind="fail"))
 
             derivation_queue = [
                 _unpack_derivation_queue_item(item)
@@ -651,15 +632,56 @@ def run_import(args: argparse.Namespace) -> int:
 
             if summary.stopped:
                 break
+            if summary.failed_count > 0:
+                log_event(
+                    build_event_line(
+                        "micSync failures detected; skipping confirmatory rescans",
+                        kind="event",
+                    )
+                )
+                break
             rescan_requested = lock.consume_rescan_request()
+            if pass_index == 0:
+                completed_rescans = 1
+                pass_index += 1
+                log_event(build_event_line("micSync confirmatory rescan starting", kind="event"))
+                continue
+
+            if len(pending_candidates) == 0 and not rescan_requested:
+                if summary.failed_count == 0 and config.eject and not summary.stopped:
+                    attached_volumes = {
+                        label: volume_root
+                        for label, volume_root in seen_volumes.items()
+                        if volume_root.is_dir()
+                    }
+                    if attached_volumes:
+                        log_event(build_event_line("micSync rescan stable; attempting eject", kind="event"))
+                    for label, volume_root in attached_volumes.items():
+                        if eject_volume(volume_root):
+                            ejected_volumes.append(label)
+                            log_event(build_event_line(f"micSync ejected volume {label}", kind="eject"))
+                        else:
+                            log_event(build_event_line(f"micSync failed to eject volume {label}", kind="fail"))
+                log_event(build_event_line("micSync run cycle complete after stable rescan", kind="event"))
+                break
+
+            if completed_rescans >= MAX_CONFIRMATION_RESCANS:
+                summary.warning_count += 1
+                log_event(
+                    build_event_line(
+                        f"micSync rescan cap reached count={MAX_CONFIRMATION_RESCANS}",
+                        kind="warn",
+                    )
+                )
+                break
+
+            completed_rescans += 1
+            pass_index += 1
             if rescan_requested:
                 log_event(build_event_line("micSync rescan requested; continuing", kind="event"))
-                continue
-            if any_processed:
-                log_event(build_event_line("micSync run cycle complete; no rescan requested", kind="event"))
-                break
-            log_event(build_event_line("micSync no work processed; exiting", kind="event"))
-            break
+            else:
+                log_event(build_event_line("micSync rescan not yet stable; continuing", kind="event"))
+            continue
 
         elapsed_seconds = int((datetime.now(timezone.utc) - run_started).total_seconds())
         log_event(
@@ -668,6 +690,7 @@ def run_import(args: argparse.Namespace) -> int:
                 f"mirrored={summary.mirrored_count} "
                 f"derived={summary.derived_count} "
                 f"duplicate={summary.duplicate_count} "
+                f"rescan_existing={summary.rescan_existing_count} "
                 f"failed={summary.failed_count} "
                 f"warning={summary.warning_count} "
                 f"total={summary.total_bytes / 1_000_000:.0f}MB "
@@ -699,6 +722,7 @@ def run_import(args: argparse.Namespace) -> int:
                         mirrored_count=summary.mirrored_count,
                         derived_count=summary.derived_count,
                         duplicate_count=summary.duplicate_count,
+                        rescan_existing=summary.rescan_existing_count,
                         failed_count=summary.failed_count,
                         warning_count=summary.warning_count,
                         total_bytes=summary.total_bytes,

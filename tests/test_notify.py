@@ -29,6 +29,7 @@ class NotifyTest(unittest.TestCase):
             mirrored_count=3,
             derived_count=2,
             duplicate_count=1,
+            rescan_existing=4,
             failed_count=0,
             warning_count=2,
             total_bytes=1024,
@@ -38,6 +39,7 @@ class NotifyTest(unittest.TestCase):
         self.assertIn("3 imported", message)
         self.assertIn("2 organized", message)
         self.assertIn("1 duplicate", message)
+        self.assertIn("4 rescan existing", message)
         self.assertIn("2 warning", message)
         self.assertIn("12s", message)
 

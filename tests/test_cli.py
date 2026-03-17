@@ -583,7 +583,7 @@ class CliRunTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("micSync mirror starting candidates=2 existing=0 total=400MB", stdout.getvalue())
         self.assertIn(
-            "| mirror    |  1/2 |  0.2/ 0.4 GB, 58% | 233.00MB | raw/MIC_01/A/TX01_MIC001_20260315_120000.wav",
+            "| mirror    |  1/2 |  0.2/ 0.4 GB,  58% | 233.00MB | raw/MIC_01/A/TX01_MIC001_20260315_120000.wav",
             stdout.getvalue(),
         )
         self.assertIn(

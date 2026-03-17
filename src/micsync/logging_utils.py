@@ -48,7 +48,7 @@ def _format_progress_gb_and_percent(processed_bytes: int, total_bytes: int) -> s
     processed_gb = processed_bytes / 1_000_000_000
     total_gb = total_bytes / 1_000_000_000 if total_bytes else 0
     percent = round((processed_bytes / total_bytes) * 100) if total_bytes else 0
-    return f"{processed_gb:>4.1f}/{total_gb:>4.1f} GB, {percent:.0f}%"
+    return f"{processed_gb:>4.1f}/{total_gb:>4.1f} GB, {percent:>3.0f}%"
 
 
 def build_event_line(message: str, *, kind: str = "event", when: datetime | None = None) -> str:

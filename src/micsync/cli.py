@@ -24,6 +24,7 @@ from micsync.logging_utils import (
     build_event_line,
     build_progress_line,
     build_run_logger,
+    rotate_run_log_if_oversized,
 )
 from micsync.notify import (
     build_completion_message,
@@ -51,6 +52,7 @@ class RunSummary:
 
 
 MAX_CONFIRMATION_RESCANS = 5
+HOT_RUN_LOG_MAX_BYTES = 32 * 1024 * 1024
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -902,6 +904,10 @@ def run_import(args: argparse.Namespace) -> int:
                         elapsed_seconds=elapsed_seconds,
                     ),
                 )
+        rotate_run_log_if_oversized(
+            log_path=log_path,
+            max_bytes=HOT_RUN_LOG_MAX_BYTES,
+        )
         return 0 if summary.failed_count == 0 else 1
     finally:
         signal.signal(signal.SIGINT, previous_sigint)

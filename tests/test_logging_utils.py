@@ -6,9 +6,11 @@ from datetime import datetime
 from pathlib import Path
 
 from micsync.logging_utils import (
+    append_run_log,
     build_event_line,
     build_run_logger,
     build_progress_line,
+    rotate_run_log_if_oversized,
 )
 
 
@@ -126,3 +128,34 @@ class LoggingUtilsTest(unittest.TestCase):
 
             self.assertEqual(stdout.getvalue(), "")
             self.assertIn("micSync event", log_path.read_text(encoding="utf-8"))
+
+    def test_rotate_run_log_if_oversized_renames_hot_log_and_keeps_rotation_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "logs" / "runs.log"
+            append_run_log(log_path, "micSync event")
+
+            rotated_path = rotate_run_log_if_oversized(
+                log_path=log_path,
+                max_bytes=1,
+                when=datetime(2026, 3, 16, 22, 45, 0),
+            )
+            self.assertIsNotNone(rotated_path)
+            assert rotated_path is not None
+            self.assertFalse(log_path.exists())
+            self.assertTrue(rotated_path.exists())
+            rotated_contents = rotated_path.read_text(encoding="utf-8")
+            self.assertIn("micSync event", rotated_contents)
+            self.assertIn("micSync rotating oversized log", rotated_contents)
+
+    def test_rotate_run_log_if_oversized_leaves_small_log_in_place(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "logs" / "runs.log"
+            append_run_log(log_path, "micSync event")
+
+            rotated_path = rotate_run_log_if_oversized(
+                log_path=log_path,
+                max_bytes=10_000,
+                when=datetime(2026, 3, 16, 22, 45, 0),
+            )
+            self.assertIsNone(rotated_path)
+            self.assertTrue(log_path.exists())

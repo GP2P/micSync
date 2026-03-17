@@ -13,6 +13,33 @@ def append_run_log(log_path: Path, message: str) -> None:
         handle.write(f"{message}\n")
 
 
+def rotate_run_log_if_oversized(
+    *,
+    log_path: Path,
+    max_bytes: int,
+    when: datetime | None = None,
+) -> Path | None:
+    if not log_path.exists():
+        return None
+    size_bytes = log_path.stat().st_size
+    if size_bytes <= max_bytes:
+        return None
+    append_run_log(
+        log_path,
+        build_event_line(
+            "micSync rotating oversized log "
+            f"size_bytes={size_bytes} threshold_bytes={max_bytes}",
+            kind="event",
+            when=when,
+        ),
+    )
+    rotated_path = log_path.with_name(
+        f"{log_path.stem}-{format_log_timestamp(when).replace('.', '').replace(':', '').replace(' ', '-')}{log_path.suffix}"
+    )
+    log_path.replace(rotated_path)
+    return rotated_path
+
+
 def build_run_logger(*, log_path: Path, echo_to_stdout: bool) -> RunLogger:
     def log_event(message: str) -> None:
         append_run_log(log_path, message)

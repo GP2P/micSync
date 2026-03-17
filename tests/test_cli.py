@@ -1076,6 +1076,75 @@ class CliRunTest(unittest.TestCase):
         self.assertIn("no candidates detected", stdout.getvalue())
         self.assertIn("no candidates detected", log_contents)
 
+    def test_run_rotates_oversized_log_after_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            recordings_root = tmp_path / "recordings"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=False,
+                derived_outputs_strategy="clone_then_copy",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=False,
+                eject=False,
+            )
+
+            class IdleLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return False
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=IdleLock()),
+                mock.patch("micsync.cli.scan_candidates", return_value=[]),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+                mock.patch("micsync.cli.HOT_RUN_LOG_MAX_BYTES", 1),
+            ):
+                result = run_import(
+                    argparse.Namespace(
+                        max_file_size_mb=None,
+                        notify=None,
+                        eject=None,
+                        stop=False,
+                        run_detached_child=False,
+                    )
+                )
+
+            rotated_logs = sorted((config.runtime_root / "logs").glob("runs-*.log"))
+            self.assertEqual(result, 0)
+            self.assertEqual(len(rotated_logs), 1)
+            self.assertFalse((config.runtime_root / "logs" / "runs.log").exists())
+            self.assertIn("micSync rotating oversized log", rotated_logs[0].read_text(encoding="utf-8"))
+
     def test_scan_logs_volume_start_and_finish_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

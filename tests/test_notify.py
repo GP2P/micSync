@@ -35,6 +35,7 @@ class NotifyTest(unittest.TestCase):
             total_bytes=1024,
             elapsed_seconds=12,
             ejected_volumes=["MIC 01", "MIC 02"],
+            attached_volumes=[],
         )
         self.assertIn("3 imported", message)
         self.assertIn("2 organized", message)

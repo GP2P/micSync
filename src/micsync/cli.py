@@ -256,6 +256,12 @@ def _currently_attached_volume_roots(source_volumes: list[Path]) -> list[Path]:
     return _planned_scan_volume_roots(source_volumes)
 
 
+def _requested_volumes_suffix(source_volumes: list[Path]) -> str:
+    if not source_volumes:
+        return ""
+    return f" requested_volumes={repr([str(path) for path in source_volumes])}"
+
+
 def run_import(args: argparse.Namespace) -> int:
     config = _load_config(args)
     run_root = config.runtime_root / "run"
@@ -308,6 +314,8 @@ def run_import(args: argparse.Namespace) -> int:
     seen_volumes: dict[str, Path] = {}
     summary = RunSummary()
     ejected_volumes: list[str] = []
+    attached_volumes: list[str] = []
+    warned_attached_labels: set[str] = set()
     signal_stop_requested = {"value": False}
     source_volumes = _resolve_source_volumes(getattr(args, "source_volume", None))
 
@@ -367,14 +375,20 @@ def run_import(args: argparse.Namespace) -> int:
                 break
             lock.refresh("scanning")
             scan_volume_roots = _planned_scan_volume_roots(source_volumes)
+            active_scan_volume_roots = _currently_attached_volume_roots(source_volumes)
+            requested_volumes_suffix = _requested_volumes_suffix(source_volumes)
+            scanned_volume_roots: list[Path] = []
             log_event(
                 build_event_line(
-                    f"micSync scan started volumes={len(scan_volume_roots)}",
+                    "micSync scan started "
+                    f"volumes={len(active_scan_volume_roots)}"
+                    f"{requested_volumes_suffix}",
                     kind="scan",
                 )
             )
 
             def on_volume_start(volume_root: Path) -> None:
+                scanned_volume_roots.append(volume_root)
                 log_event(
                     build_event_line(
                         f"micSync scan volume started label={volume_root.name} path={volume_root}",
@@ -403,7 +417,10 @@ def run_import(args: argparse.Namespace) -> int:
                 seen_volumes[candidate.volume_label] = candidate.volume_root
             log_event(
                 build_event_line(
-                    f"micSync scan complete candidates={len(pending_candidates)} volumes={len(scan_volume_roots)}",
+                    "micSync scan complete "
+                    f"candidates={len(pending_candidates)} "
+                    f"volumes={len(scanned_volume_roots)}"
+                    f"{requested_volumes_suffix}",
                     kind="scan",
                 )
             )
@@ -657,11 +674,36 @@ def run_import(args: argparse.Namespace) -> int:
                     if attached_volumes:
                         log_event(build_event_line("micSync rescan stable; attempting eject", kind="event"))
                     for label, volume_root in attached_volumes.items():
-                        if eject_volume(volume_root):
+                        eject_result = eject_volume(volume_root)
+                        if eject_result.ok:
                             ejected_volumes.append(label)
                             log_event(build_event_line(f"micSync ejected volume {label}", kind="eject"))
                         else:
-                            log_event(build_event_line(f"micSync failed to eject volume {label}", kind="fail"))
+                            warned_attached_labels.add(label)
+                            summary.warning_count += 1
+                            detail_suffix = (
+                                f" detail={eject_result.detail}"
+                                if eject_result.detail
+                                else ""
+                            )
+                            log_event(
+                                build_event_line(
+                                    f"micSync failed to eject volume {label}{detail_suffix}",
+                                    kind="warn",
+                                )
+                            )
+                            if config.notify:
+                                emit_notification(
+                                    title="micSync eject warning",
+                                    message=(
+                                        f"{label} failed to eject"
+                                        + (
+                                            f" | {eject_result.detail}"
+                                            if eject_result.detail
+                                            else ""
+                                        )
+                                    ),
+                                )
                 log_event(build_event_line("micSync run cycle complete after stable rescan", kind="event"))
                 break
 
@@ -682,6 +724,22 @@ def run_import(args: argparse.Namespace) -> int:
             else:
                 log_event(build_event_line("micSync rescan not yet stable; continuing", kind="event"))
             continue
+
+        if config.eject and not summary.stopped:
+            attached_volumes = [
+                label
+                for label, volume_root in seen_volumes.items()
+                if label not in ejected_volumes and volume_root.is_dir()
+            ]
+            for label in attached_volumes:
+                if label not in warned_attached_labels:
+                    summary.warning_count += 1
+                log_event(build_event_line(f"micSync volume still attached {label}", kind="warn"))
+                if config.notify:
+                    emit_notification(
+                        title="micSync volume still attached",
+                        message=f"{label} is still attached after import",
+                    )
 
         elapsed_seconds = int((datetime.now(timezone.utc) - run_started).total_seconds())
         log_event(
@@ -728,6 +786,7 @@ def run_import(args: argparse.Namespace) -> int:
                         total_bytes=summary.total_bytes,
                         elapsed_seconds=elapsed_seconds,
                         ejected_volumes=ejected_volumes,
+                        attached_volumes=attached_volumes,
                     ),
                 )
             else:

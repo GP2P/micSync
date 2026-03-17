@@ -49,6 +49,7 @@ def build_completion_message(
     total_bytes: int,
     elapsed_seconds: int,
     ejected_volumes: list[str],
+    attached_volumes: list[str],
 ) -> str:
     parts = [
         f"{mirrored_count} imported",
@@ -62,6 +63,8 @@ def build_completion_message(
     ]
     if ejected_volumes:
         parts.append(f"ejected: {', '.join(ejected_volumes)}")
+    if attached_volumes:
+        parts.append(f"attached: {', '.join(attached_volumes)}")
     return " | ".join(parts)
 
 

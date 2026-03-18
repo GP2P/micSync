@@ -265,6 +265,30 @@ def _requested_volumes_suffix(source_volumes: list[Path]) -> str:
     return f" requested_volumes={repr([str(path) for path in source_volumes])}"
 
 
+def _prune_empty_directory_tree(root: Path) -> bool:
+    if not root.exists():
+        return True
+    if not root.is_dir():
+        return False
+
+    tree_is_empty = True
+    for child in list(root.iterdir()):
+        if child.is_dir():
+            if not _prune_empty_directory_tree(child):
+                tree_is_empty = False
+        else:
+            tree_is_empty = False
+
+    if not tree_is_empty:
+        return False
+
+    try:
+        root.rmdir()
+    except OSError:
+        return False
+    return True
+
+
 def run_import(args: argparse.Namespace) -> int:
     config = _load_config(args)
     run_root = config.runtime_root / "run"
@@ -908,6 +932,7 @@ def run_import(args: argparse.Namespace) -> int:
             log_path=log_path,
             max_bytes=HOT_RUN_LOG_MAX_BYTES,
         )
+        _prune_empty_directory_tree(config.recordings_tmp_root)
         return 0 if summary.failed_count == 0 else 1
     finally:
         signal.signal(signal.SIGINT, previous_sigint)

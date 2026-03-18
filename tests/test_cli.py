@@ -1076,6 +1076,207 @@ class CliRunTest(unittest.TestCase):
         self.assertIn("no candidates detected", stdout.getvalue())
         self.assertIn("no candidates detected", log_contents)
 
+    def test_noop_run_removes_empty_tmp_tree_on_graceful_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            recordings_root = tmp_path / "recordings"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=False,
+                derived_outputs_strategy="clone_then_copy",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=False,
+                eject=False,
+            )
+            (config.recordings_tmp_root / "MIC_01" / "A").mkdir(parents=True)
+
+            class IdleLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return False
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            args = argparse.Namespace(
+                max_file_size_mb=None,
+                notify=None,
+                eject=None,
+                stop=False,
+                run_detached_child=False,
+            )
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=IdleLock()),
+                mock.patch("micsync.cli.scan_candidates", return_value=[]),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+            ):
+                result = run_import(args)
+            tmp_root_exists = config.recordings_tmp_root.exists()
+
+        self.assertEqual(result, 0)
+        self.assertFalse(tmp_root_exists)
+
+    def test_noop_run_keeps_tmp_tree_when_staging_file_remains(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            recordings_root = tmp_path / "recordings"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=False,
+                derived_outputs_strategy="clone_then_copy",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=False,
+                eject=False,
+            )
+            staged_file = config.recordings_tmp_root / "MIC_01" / "A" / "recording.wav.tmp"
+            staged_file.parent.mkdir(parents=True)
+            staged_file.write_bytes(b"partial")
+
+            class IdleLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return False
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            args = argparse.Namespace(
+                max_file_size_mb=None,
+                notify=None,
+                eject=None,
+                stop=False,
+                run_detached_child=False,
+            )
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=IdleLock()),
+                mock.patch("micsync.cli.scan_candidates", return_value=[]),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+            ):
+                result = run_import(args)
+            tmp_root_exists = config.recordings_tmp_root.exists()
+            staged_bytes = staged_file.read_bytes() if staged_file.exists() else None
+
+        self.assertEqual(result, 0)
+        self.assertTrue(tmp_root_exists)
+        self.assertEqual(staged_bytes, b"partial")
+
+    def test_graceful_stop_removes_empty_tmp_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            recordings_root = tmp_path / "recordings"
+            config = Config(
+                runtime_root=tmp_path / "runtime",
+                recordings_root=recordings_root,
+                recordings_raw_root=recordings_root / "raw",
+                recordings_derived_root=recordings_root / "derived",
+                recordings_db_path=recordings_root / "db" / "recordings.sqlite3",
+                recordings_tmp_root=recordings_root / "tmp",
+                max_file_size_mb=None,
+                extension_allowlist=(".wav",),
+                variant_policy="all",
+                enable_derived_outputs=False,
+                derived_outputs_strategy="clone_then_copy",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+                stale_lock_timeout_seconds=300,
+                notify=False,
+                eject=False,
+            )
+            (config.recordings_tmp_root / "MIC_01" / "A").mkdir(parents=True)
+
+            class StopLock:
+                def acquire_or_request_rescan(self) -> LockAcquireResult:
+                    return LockAcquireResult(
+                        acquired=True,
+                        recovered_stale_lock=False,
+                        requested_rescan=False,
+                    )
+
+                def request_stop(self) -> bool:
+                    return True
+
+                def refresh(self, phase: str) -> None:
+                    return None
+
+                def consume_stop_request(self) -> bool:
+                    return True
+
+                def consume_rescan_request(self) -> bool:
+                    return False
+
+                def release(self) -> None:
+                    return None
+
+            args = argparse.Namespace(
+                max_file_size_mb=None,
+                notify=None,
+                eject=None,
+                stop=False,
+                run_detached_child=False,
+            )
+            with (
+                mock.patch("micsync.cli._load_config", return_value=config),
+                mock.patch("micsync.cli.LockManager", return_value=StopLock()),
+                mock.patch("micsync.cli.build_stop_command", return_value="micSync --stop"),
+            ):
+                result = run_import(args)
+            tmp_root_exists = config.recordings_tmp_root.exists()
+
+        self.assertEqual(result, 0)
+        self.assertFalse(tmp_root_exists)
+
     def test_run_rotates_oversized_log_after_completion(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

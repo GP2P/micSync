@@ -41,7 +41,7 @@ def read_duration_ms(path: Path) -> int | None:
     return None
 
 
-def preserve_file_timestamps(*, source_path: Path, dest_path: Path) -> None:
+def preserve_path_timestamps(*, source_path: Path, dest_path: Path) -> None:
     shutil.copystat(source_path, dest_path)
 
     source_birthtime = getattr(source_path.stat(), "st_birthtime", None)
@@ -59,6 +59,10 @@ def preserve_file_timestamps(*, source_path: Path, dest_path: Path) -> None:
         text=True,
         check=False,
     )
+
+
+def preserve_file_timestamps(*, source_path: Path, dest_path: Path) -> None:
+    preserve_path_timestamps(source_path=source_path, dest_path=dest_path)
 
 
 def materialize_derived_file(

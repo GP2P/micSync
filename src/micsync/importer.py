@@ -11,6 +11,7 @@ from typing import Callable
 from micsync.audio import (
     derive_end_time,
     materialize_derived_file,
+    preserve_path_timestamps,
     preserve_file_timestamps,
     read_duration_ms,
 )
@@ -260,6 +261,7 @@ def mirror_recording_to_raw(
                 os.fsync(dst.fileno())
         tmp_path.replace(raw_path)
         preserve_file_timestamps(source_path=source_path, dest_path=raw_path)
+        preserve_path_timestamps(source_path=source_path.parent, dest_path=raw_path.parent)
 
     attempted_at = datetime.now().isoformat(timespec="seconds")
     source_file_id = catalog.upsert_source_file(

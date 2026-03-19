@@ -53,6 +53,7 @@ class RunSummary:
 
 MAX_CONFIRMATION_RESCANS = 5
 HOT_RUN_LOG_MAX_BYTES = 32 * 1024 * 1024
+IGNORABLE_TMP_FILENAMES = frozenset({".DS_Store"})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -275,6 +276,11 @@ def _prune_empty_directory_tree(root: Path) -> bool:
     for child in list(root.iterdir()):
         if child.is_dir():
             if not _prune_empty_directory_tree(child):
+                tree_is_empty = False
+        elif child.name in IGNORABLE_TMP_FILENAMES:
+            try:
+                child.unlink()
+            except OSError:
                 tree_is_empty = False
         else:
             tree_is_empty = False

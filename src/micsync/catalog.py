@@ -5,6 +5,8 @@ import sqlite3
 from pathlib import Path
 from typing import Iterator
 
+from micsync.logging_utils import local_now_iso
+
 
 class Catalog:
     def __init__(self, db_path: Path) -> None:
@@ -38,8 +40,8 @@ class Catalog:
                     physical_mic_id integer not null default 0,
                     source_parent_folder text,
                     hidden integer not null default 0,
-                    first_imported_at text not null default (datetime('now')),
-                    last_updated_at text not null default (datetime('now')),
+                    first_imported_at text not null,
+                    last_updated_at text not null,
                     health_status text not null default 'ok'
                 );
 
@@ -62,7 +64,7 @@ class Catalog:
                     health_status text not null default 'ok',
                     anomaly_code text,
                     anomaly_detail text,
-                    last_updated_at text not null default (datetime('now'))
+                    last_updated_at text not null
                 );
 
                 create table if not exists source_files (
@@ -102,15 +104,14 @@ class Catalog:
                     source_file_id integer references source_files(id),
                     raw_relative_path text,
                     volume_label text,
-                    created_at text not null default (datetime('now')),
-                    acknowledged_at text,
-                    resolved_at text
+                    created_at text not null
                 );
                 """
             )
             self._ensure_column(conn, table_name="takes", column_name="hidden", column_def="integer not null default 0")
             self._ensure_column(conn, table_name="segments", column_name="hidden", column_def="integer not null default 0")
             self._ensure_column(conn, table_name="source_files", column_name="hidden", column_def="integer not null default 0")
+            self._rebuild_legacy_anomalies_table(conn)
 
     def _ensure_column(
         self,
@@ -126,6 +127,59 @@ class Catalog:
             return
         conn.execute(f"alter table {table_name} add column {column_name} {column_def}")
 
+    def _table_columns(self, conn: sqlite3.Connection, *, table_name: str) -> set[str]:
+        rows = conn.execute(f"pragma table_info({table_name})").fetchall()
+        return {str(row["name"]) for row in rows}
+
+    def _rebuild_legacy_anomalies_table(self, conn: sqlite3.Connection) -> None:
+        columns = self._table_columns(conn, table_name="anomalies")
+        if not {"acknowledged_at", "resolved_at"} & columns:
+            return
+        conn.executescript(
+            """
+            create table anomalies__new (
+                id integer primary key,
+                run_id text not null,
+                phase text not null,
+                severity text not null,
+                code text not null,
+                message text not null,
+                source_file_id integer references source_files(id),
+                raw_relative_path text,
+                volume_label text,
+                created_at text not null
+            );
+
+            insert into anomalies__new (
+                id,
+                run_id,
+                phase,
+                severity,
+                code,
+                message,
+                source_file_id,
+                raw_relative_path,
+                volume_label,
+                created_at
+            )
+            select
+                id,
+                run_id,
+                phase,
+                severity,
+                code,
+                message,
+                source_file_id,
+                raw_relative_path,
+                volume_label,
+                created_at
+            from anomalies;
+
+            drop table anomalies;
+            alter table anomalies__new rename to anomalies;
+            """
+        )
+
     def upsert_take(
         self,
         *,
@@ -138,6 +192,7 @@ class Catalog:
         hidden: bool = False,
         health_status: str = "ok",
     ) -> int:
+        now = local_now_iso()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -149,8 +204,10 @@ class Catalog:
                     physical_mic_id,
                     source_parent_folder,
                     hidden,
+                    first_imported_at,
+                    last_updated_at,
                     health_status
-                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(take_key) do update set
                     take_start_at=case
                         when excluded.take_start_at < takes.take_start_at then excluded.take_start_at
@@ -170,7 +227,7 @@ class Catalog:
                         when excluded.health_status != 'ok' then excluded.health_status
                         else takes.health_status
                     end,
-                    last_updated_at=datetime('now')
+                    last_updated_at=excluded.last_updated_at
                 """,
                 (
                     take_key,
@@ -180,6 +237,8 @@ class Catalog:
                     physical_mic_id,
                     source_parent_folder,
                     int(hidden),
+                    now,
+                    now,
                     health_status,
                 ),
             )
@@ -212,6 +271,7 @@ class Catalog:
         anomaly_code: str | None = None,
         anomaly_detail: str | None = None,
     ) -> int:
+        now = local_now_iso()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -230,10 +290,11 @@ class Catalog:
                     first_seen_at,
                     last_attempted_at,
                     completed_at,
+                    last_updated_at,
                     health_status,
                     anomaly_code,
                     anomaly_detail
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(segment_key) do update set
                     take_id=excluded.take_id,
                     segment_index=excluded.segment_index,
@@ -254,7 +315,7 @@ class Catalog:
                     end,
                     anomaly_code=coalesce(excluded.anomaly_code, segments.anomaly_code),
                     anomaly_detail=coalesce(excluded.anomaly_detail, segments.anomaly_detail),
-                    last_updated_at=datetime('now')
+                    last_updated_at=excluded.last_updated_at
                 """,
                 (
                     take_id,
@@ -271,6 +332,7 @@ class Catalog:
                     first_seen_at,
                     last_attempted_at,
                     completed_at,
+                    now,
                     health_status,
                     anomaly_code,
                     anomaly_detail,
@@ -570,6 +632,7 @@ class Catalog:
         raw_relative_path: str | None = None,
         volume_label: str | None = None,
     ) -> int:
+        created_at = local_now_iso()
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -581,8 +644,9 @@ class Catalog:
                     message,
                     source_file_id,
                     raw_relative_path,
-                    volume_label
-                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                    volume_label,
+                    created_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -593,6 +657,7 @@ class Catalog:
                     source_file_id,
                     raw_relative_path,
                     volume_label,
+                    created_at,
                 ),
             )
             return int(cursor.lastrowid)

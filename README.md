@@ -77,6 +77,11 @@ Future enrichment tables such as transcripts, summaries, or tags should attach t
 - `segment_id` when the enrichment describes the physical chunk
 - `take_id` when it describes the grouped logical recording
 
+Timestamp policy:
+
+- Recording timeline fields such as `recording_start_at`, `take_start_at`, and `segment_start_at` reflect the recorder's local wall-clock capture time.
+- Operational fields such as anomaly creation and import bookkeeping timestamps are stored as local ISO 8601 timestamps with a UTC offset, for example `2026-03-19T19:41:52-07:00`.
+
 ## How It Works
 
 Each run has two stages.

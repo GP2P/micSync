@@ -1,3 +1,4 @@
+from datetime import datetime
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,12 @@ from micsync.catalog import Catalog
 
 
 class CatalogTest(unittest.TestCase):
+    def assert_is_offset_datetime(self, value: str | None) -> None:
+        self.assertIsNotNone(value)
+        parsed = datetime.fromisoformat(str(value))
+        self.assertIsNotNone(parsed.tzinfo)
+        self.assertIsNotNone(parsed.utcoffset())
+
     def test_connect_context_closes_connection(self) -> None:
         class FakeConnection:
             def __init__(self) -> None:
@@ -126,6 +133,74 @@ class CatalogTest(unittest.TestCase):
             self.assertIn("hidden", segment_columns)
             self.assertIn("hidden", source_columns)
 
+    def test_initialize_rebuilds_legacy_anomalies_table_without_lifecycle_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "recordings.sqlite3"
+            connection = sqlite3.connect(db_path)
+            try:
+                connection.executescript(
+                    """
+                    create table anomalies (
+                        id integer primary key,
+                        run_id text not null,
+                        phase text not null,
+                        severity text not null,
+                        code text not null,
+                        message text not null,
+                        source_file_id integer,
+                        raw_relative_path text,
+                        volume_label text,
+                        created_at text not null default (datetime('now')),
+                        acknowledged_at text,
+                        resolved_at text
+                    );
+
+                    insert into anomalies (
+                        id,
+                        run_id,
+                        phase,
+                        severity,
+                        code,
+                        message,
+                        source_file_id,
+                        raw_relative_path,
+                        volume_label,
+                        created_at,
+                        acknowledged_at,
+                        resolved_at
+                    ) values (
+                        1,
+                        'run-legacy',
+                        'mirror',
+                        'fail',
+                        'mirror_failed',
+                        'legacy failure',
+                        7,
+                        'raw/MIC_01/A/file.wav',
+                        'MIC 01',
+                        '2026-03-20 02:41:52',
+                        null,
+                        null
+                    );
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            catalog = Catalog(db_path)
+            with catalog._connect() as conn:
+                anomaly_columns = {
+                    row["name"] for row in conn.execute("pragma table_info(anomalies)").fetchall()
+                }
+                rows = conn.execute("select * from anomalies").fetchall()
+
+        self.assertNotIn("acknowledged_at", anomaly_columns)
+        self.assertNotIn("resolved_at", anomaly_columns)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["run_id"], "run-legacy")
+        self.assertEqual(rows[0]["created_at"], "2026-03-20 02:41:52")
+
     def test_upsert_take_creates_one_take_and_reuses_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "recordings.sqlite3"
@@ -148,7 +223,8 @@ class CatalogTest(unittest.TestCase):
             )
             self.assertEqual(take_id_1, take_id_2)
             row = catalog.fetch_take(take_id_1)
-            self.assertIsNotNone(row["first_imported_at"])
+            self.assert_is_offset_datetime(row["first_imported_at"])
+            self.assert_is_offset_datetime(row["last_updated_at"])
 
     def test_source_files_attach_to_segments_and_preserve_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -261,6 +337,7 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(rows[0]["run_id"], "run-123")
         self.assertEqual(rows[0]["severity"], "fail")
         self.assertEqual(rows[0]["code"], "derive_failed")
+        self.assert_is_offset_datetime(rows[0]["created_at"])
 
     def test_pending_source_files_for_derivation_are_ordered_by_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

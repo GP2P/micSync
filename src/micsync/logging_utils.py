@@ -7,6 +7,14 @@ from pathlib import Path
 RunLogger = Callable[[str], None]
 
 
+def local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
+def local_now_iso(*, timespec: str = "seconds") -> str:
+    return local_now().isoformat(timespec=timespec)
+
+
 def append_run_log(log_path: Path, message: str) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as handle:
@@ -51,7 +59,7 @@ def build_run_logger(*, log_path: Path, echo_to_stdout: bool) -> RunLogger:
 
 def _resolve_timestamp(when: datetime | None) -> datetime:
     if when is None:
-        return datetime.now().astimezone()
+        return local_now()
     if when.tzinfo is None:
         return when
     return when.astimezone()

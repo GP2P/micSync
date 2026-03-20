@@ -16,6 +16,12 @@ from micsync.importer import (
 
 
 class ImporterTest(unittest.TestCase):
+    def assert_is_offset_datetime(self, value: str | None) -> None:
+        self.assertIsNotNone(value)
+        parsed = datetime.fromisoformat(str(value))
+        self.assertIsNotNone(parsed.tzinfo)
+        self.assertIsNotNone(parsed.utcoffset())
+
     def test_mirror_recording_to_raw_preserves_source_folder_timestamps(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -144,13 +150,18 @@ class ImporterTest(unittest.TestCase):
             take_row = catalog.fetch_take(outcome.take_id)
             segment_row = catalog.fetch_segment(outcome.segment_id)
             source_file_row = catalog.fetch_source_file(outcome.source_file_id)
-            self.assertIsNotNone(take_row["first_imported_at"])
+            self.assert_is_offset_datetime(take_row["first_imported_at"])
+            self.assert_is_offset_datetime(take_row["last_updated_at"])
             self.assertEqual(segment_row["segment_key"], "20260608_112048_TX02_MIC001")
             self.assertEqual(source_file_row["source_volume_label"], "MIC 01")
             self.assertEqual(source_file_row["source_volume_identifier"], "MIC 01")
-            self.assertIsNotNone(source_file_row["first_seen_at"])
-            self.assertIsNotNone(source_file_row["last_attempted_at"])
-            self.assertIsNotNone(source_file_row["mirrored_at"])
+            self.assert_is_offset_datetime(segment_row["first_seen_at"])
+            self.assert_is_offset_datetime(segment_row["last_attempted_at"])
+            self.assert_is_offset_datetime(segment_row["completed_at"])
+            self.assert_is_offset_datetime(segment_row["last_updated_at"])
+            self.assert_is_offset_datetime(source_file_row["first_seen_at"])
+            self.assert_is_offset_datetime(source_file_row["last_attempted_at"])
+            self.assert_is_offset_datetime(source_file_row["mirrored_at"])
             self.assertEqual(
                 source_file_row["raw_relative_path"],
                 "raw/MIC_01/TX_MIC001_20260308_143058/TX02_MIC001_20260608_112048_orig.wav",

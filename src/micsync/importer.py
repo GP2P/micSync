@@ -16,7 +16,7 @@ from micsync.audio import (
     read_duration_ms,
 )
 from micsync.catalog import Catalog
-from micsync.logging_utils import RunLogger, append_run_log, build_event_line
+from micsync.logging_utils import RunLogger, append_run_log, build_event_line, local_now_iso
 from micsync.parser import ParsedRecordingName, parse_physical_mic_id, parse_recording_name
 
 
@@ -263,7 +263,7 @@ def mirror_recording_to_raw(
         preserve_file_timestamps(source_path=source_path, dest_path=raw_path)
         preserve_path_timestamps(source_path=source_path.parent, dest_path=raw_path.parent)
 
-    attempted_at = datetime.now().isoformat(timespec="seconds")
+    attempted_at = local_now_iso()
     source_file_id = catalog.upsert_source_file(
         source_key=str(raw_path.relative_to(recordings_root)),
         segment_id=None,
@@ -369,7 +369,7 @@ def derive_mirrored_recording(
         hidden=hidden,
         health_status="warning" if warning_messages else "ok",
     )
-    attempted_at = datetime.now().isoformat(timespec="seconds")
+    attempted_at = local_now_iso()
     segment_id = catalog.upsert_segment(
         take_id=take_id,
         segment_key=segment_key,

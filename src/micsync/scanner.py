@@ -59,6 +59,7 @@ def scan_candidates(
     include_volume_roots: list[Path] | None = None,
     on_volume_start: Callable[[Path], None] | None = None,
     on_volume_complete: Callable[[Path, int], None] | None = None,
+    on_scan_error: Callable[[Path, OSError], None] | None = None,
 ) -> list[CandidateFile]:
     if include_volume_roots is None and not volumes_root.exists():
         return []
@@ -76,7 +77,14 @@ def scan_candidates(
         if on_volume_start is not None:
             on_volume_start(volume_root)
         volume_candidate_count = 0
-        for root, dirnames, files in os.walk(volume_root, topdown=True, onerror=lambda _: None):
+
+        def handle_walk_error(error: OSError) -> None:
+            if on_scan_error is None:
+                return
+            error_path = Path(error.filename) if error.filename else volume_root
+            on_scan_error(error_path, error)
+
+        for root, dirnames, files in os.walk(volume_root, topdown=True, onerror=handle_walk_error):
             root_path = Path(root)
             if root_path == volume_root:
                 dirnames[:] = sorted(

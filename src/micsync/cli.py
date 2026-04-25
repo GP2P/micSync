@@ -9,6 +9,7 @@ import plistlib
 import signal
 import subprocess
 import sys
+import time
 import uuid
 
 from micsync.catalog import Catalog
@@ -54,6 +55,8 @@ class RunSummary:
 MAX_CONFIRMATION_RESCANS = 5
 HOT_RUN_LOG_MAX_BYTES = 32 * 1024 * 1024
 IGNORABLE_TMP_FILENAMES = frozenset({".DS_Store"})
+ZERO_CANDIDATE_SCAN_RETRY_SECONDS = 3
+ZERO_CANDIDATE_SCAN_MAX_RETRIES = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -260,6 +263,31 @@ def _currently_attached_volume_roots(source_volumes: list[Path]) -> list[Path]:
     return _planned_scan_volume_roots(source_volumes)
 
 
+def _volume_has_supported_scan_root(volume_root: Path) -> bool:
+    try:
+        return any(
+            child.is_dir()
+            and (
+                child.name.startswith("TX_MIC")
+                or child.name in {".Trashes", ".Trash", "$RECYCLE.BIN"}
+            )
+            for child in volume_root.iterdir()
+        )
+    except OSError:
+        return False
+
+
+def _should_retry_zero_candidate_scan(
+    *,
+    source_volumes: list[Path],
+    scanned_volume_roots: list[Path],
+    candidates: list[object],
+) -> bool:
+    if not source_volumes or candidates:
+        return False
+    return any(_volume_has_supported_scan_root(path) for path in scanned_volume_roots)
+
+
 def _requested_volumes_suffix(source_volumes: list[Path]) -> str:
     if not source_volumes:
         return ""
@@ -441,56 +469,85 @@ def run_import(args: argparse.Namespace) -> int:
                 log_event(build_event_line("micSync stop requested before scan", kind="stop"))
                 break
             lock.refresh("scanning")
-            scan_volume_roots = _planned_scan_volume_roots(source_volumes)
             active_scan_volume_roots = _currently_attached_volume_roots(source_volumes)
             requested_volumes_suffix = _requested_volumes_suffix(source_volumes)
-            scanned_volume_roots: list[Path] = []
-            log_event(
-                build_event_line(
-                    "micSync scan started "
-                    f"volumes={len(active_scan_volume_roots)}"
-                    f"{requested_volumes_suffix}",
-                    kind="scan",
-                )
-            )
-
-            def on_volume_start(volume_root: Path) -> None:
-                scanned_volume_roots.append(volume_root)
+            scan_attempt = 0
+            while True:
+                scanned_volume_roots: list[Path] = []
                 log_event(
                     build_event_line(
-                        f"micSync scan volume started label={volume_root.name} path={volume_root}",
+                        "micSync scan started "
+                        f"volumes={len(active_scan_volume_roots)}"
+                        f"{requested_volumes_suffix}",
                         kind="scan",
                     )
                 )
 
-            def on_volume_complete(volume_root: Path, candidate_count: int) -> None:
+                def on_volume_start(volume_root: Path) -> None:
+                    scanned_volume_roots.append(volume_root)
+                    log_event(
+                        build_event_line(
+                            f"micSync scan volume started label={volume_root.name} path={volume_root}",
+                            kind="scan",
+                        )
+                    )
+
+                def on_volume_complete(volume_root: Path, candidate_count: int) -> None:
+                    log_event(
+                        build_event_line(
+                            f"micSync scan volume complete label={volume_root.name} candidates={candidate_count}",
+                            kind="scan",
+                        )
+                    )
+
+                def on_scan_error(path: Path, error: OSError) -> None:
+                    log_event(
+                        build_event_line(
+                            f"micSync scan warning path={path} error={error}",
+                            kind="warn",
+                        )
+                    )
+
+                candidates = scan_candidates(
+                    allow_extensions=set(config.extension_allowlist),
+                    max_file_size_mb=config.max_file_size_mb,
+                    exclude_volume_labels={"Macintosh HD"},
+                    include_volume_roots=source_volumes or None,
+                    on_volume_start=on_volume_start,
+                    on_volume_complete=on_volume_complete,
+                    on_scan_error=on_scan_error,
+                )
+                pending_candidates = [c for c in candidates if c.volume_root.name not in {"Macintosh HD"}]
+                for candidate in pending_candidates:
+                    seen_volumes[candidate.volume_label] = candidate.volume_root
                 log_event(
                     build_event_line(
-                        f"micSync scan volume complete label={volume_root.name} candidates={candidate_count}",
+                        "micSync scan complete "
+                        f"candidates={len(pending_candidates)} "
+                        f"volumes={len(scanned_volume_roots)}"
+                        f"{requested_volumes_suffix}",
                         kind="scan",
                     )
                 )
-
-            candidates = scan_candidates(
-                allow_extensions=set(config.extension_allowlist),
-                max_file_size_mb=config.max_file_size_mb,
-                exclude_volume_labels={"Macintosh HD"},
-                include_volume_roots=source_volumes or None,
-                on_volume_start=on_volume_start,
-                on_volume_complete=on_volume_complete,
-            )
-            pending_candidates = [c for c in candidates if c.volume_root.name not in {"Macintosh HD"}]
-            for candidate in pending_candidates:
-                seen_volumes[candidate.volume_label] = candidate.volume_root
-            log_event(
-                build_event_line(
-                    "micSync scan complete "
-                    f"candidates={len(pending_candidates)} "
-                    f"volumes={len(scanned_volume_roots)}"
-                    f"{requested_volumes_suffix}",
-                    kind="scan",
+                if (
+                    scan_attempt >= ZERO_CANDIDATE_SCAN_MAX_RETRIES
+                    or not _should_retry_zero_candidate_scan(
+                        source_volumes=source_volumes,
+                        scanned_volume_roots=scanned_volume_roots,
+                        candidates=pending_candidates,
+                    )
+                ):
+                    break
+                scan_attempt += 1
+                log_event(
+                    build_event_line(
+                        "micSync zero-candidate scan retry "
+                        f"attempt={scan_attempt} "
+                        f"delay_seconds={ZERO_CANDIDATE_SCAN_RETRY_SECONDS}",
+                        kind="scan",
+                    )
                 )
-            )
+                time.sleep(ZERO_CANDIDATE_SCAN_RETRY_SECONDS)
             pending_candidates.sort(
                 key=lambda candidate: (
                     candidate.volume_label,

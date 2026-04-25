@@ -12,7 +12,12 @@ from unittest import mock
 from pathlib import Path
 
 from micsync.catalog import Catalog
-from micsync.cli import _recordings_root_supports_clone, build_parser, run_import
+from micsync.cli import (
+    _recordings_root_supports_clone,
+    _should_retry_zero_candidate_scan,
+    build_parser,
+    run_import,
+)
 from micsync.config import Config
 from micsync.eject import EjectResult
 from micsync.importer import MirrorOutcome
@@ -24,6 +29,32 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliSmokeTest(unittest.TestCase):
+    def test_zero_candidate_explicit_scan_retries_when_dji_roots_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            volume = Path(tmpdir) / "Volumes" / "MIC 01"
+            (volume / "TX_MIC001_20260418_192303").mkdir(parents=True)
+
+            self.assertTrue(
+                _should_retry_zero_candidate_scan(
+                    source_volumes=[volume],
+                    scanned_volume_roots=[volume],
+                    candidates=[],
+                )
+            )
+
+    def test_zero_candidate_scan_does_not_retry_without_explicit_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            volume = Path(tmpdir) / "Volumes" / "MIC 01"
+            (volume / "TX_MIC001_20260418_192303").mkdir(parents=True)
+
+            self.assertFalse(
+                _should_retry_zero_candidate_scan(
+                    source_volumes=[],
+                    scanned_volume_roots=[volume],
+                    candidates=[],
+                )
+            )
+
     def test_clone_support_probe_uses_mount_point_for_subdirectory(self) -> None:
         df_output = (
             "Filesystem 512-blocks Used Available Capacity iused ifree %iused Mounted on\n"

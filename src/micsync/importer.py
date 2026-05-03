@@ -88,9 +88,17 @@ def _raw_source_dir_name(volume_label: str | None, physical_mic_id: int) -> str:
     return "UNKNOWN"
 
 
-def _derived_relative_path(parsed: ParsedRecordingName) -> Path:
+def _derived_relative_path(
+    parsed: ParsedRecordingName,
+    *,
+    source_filename: str,
+    source_parent_folder: str,
+    organized_layout: str,
+) -> Path:
+    if organized_layout == "dji":
+        return Path("dji") / source_parent_folder / source_filename
     return (
-        Path("normalized")
+        Path("timeline")
         / parsed.start_at.strftime("%Y")
         / parsed.start_at.strftime("%m")
         / parsed.start_at.strftime("%d")
@@ -323,6 +331,7 @@ def derive_mirrored_recording(
     enable_derived_outputs: bool = False,
     derived_root: Path | None = None,
     derived_outputs_strategy: str = "clone_then_copy",
+    organized_layout: str = "timeline",
     segment_cadence_seconds: int = 1800,
     segment_group_tolerance_ms: int = 1000,
 ) -> ImportOutcome:
@@ -394,7 +403,13 @@ def derive_mirrored_recording(
     if enable_derived_outputs and derived_root is not None and not hidden:
         derived_path = materialize_derived_file(
             source_path=raw_path,
-            dest_path=derived_root / _derived_relative_path(parsed),
+            dest_path=derived_root
+            / _derived_relative_path(
+                parsed,
+                source_filename=str(source_file["source_filename"]),
+                source_parent_folder=str(source_file["source_parent_folder"]),
+                organized_layout=organized_layout,
+            ),
             strategy=derived_outputs_strategy,
         )
         if log_event is None:
@@ -457,6 +472,7 @@ def import_recording(
         enable_derived_outputs=False,
         derived_root=None,
         derived_outputs_strategy="clone_then_copy",
+        organized_layout="timeline",
         segment_cadence_seconds=segment_cadence_seconds,
         segment_group_tolerance_ms=segment_group_tolerance_ms,
     )

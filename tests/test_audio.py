@@ -4,6 +4,7 @@ import tempfile
 from unittest.mock import patch
 
 from micsync.audio import derive_end_time, materialize_derived_file
+from micsync.audio import read_duration_ms
 from micsync.scanner import scan_candidates, should_include_file
 
 
@@ -11,6 +12,10 @@ class AudioTest(unittest.TestCase):
     def test_end_time_uses_duration_when_available(self) -> None:
         end_time = derive_end_time("2026-06-08T11:20:48", duration_ms=30000)
         self.assertEqual(end_time, "2026-06-08T11:21:18")
+
+    def test_read_duration_returns_none_when_afinfo_is_unavailable(self) -> None:
+        with patch("micsync.audio.subprocess.run", side_effect=FileNotFoundError):
+            self.assertIsNone(read_duration_ms(Path("/tmp/missing.wav")))
 
     def test_max_size_filter_excludes_large_file(self) -> None:
         self.assertFalse(
@@ -111,3 +116,22 @@ class AudioTest(unittest.TestCase):
 
             self.assertEqual(result, dest_path)
             self.assertEqual(dest_path.read_bytes(), b"audio-bytes")
+
+    def test_materialize_derived_file_uses_copy_on_non_macos_auto_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_path = root / "raw.wav"
+            dest_path = root / "derived" / "normalized.wav"
+            source_path.write_bytes(b"audio-bytes")
+
+            with patch("micsync.audio.sys.platform", "win32"):
+                with patch("micsync.audio.subprocess.run") as run_mock:
+                    result = materialize_derived_file(
+                        source_path=source_path,
+                        dest_path=dest_path,
+                        strategy="auto",
+                    )
+
+            self.assertEqual(result, dest_path)
+            self.assertEqual(dest_path.read_bytes(), b"audio-bytes")
+            run_mock.assert_not_called()

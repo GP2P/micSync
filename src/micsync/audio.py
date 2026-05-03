@@ -75,7 +75,7 @@ def materialize_derived_file(
     if dest_path.exists():
         return dest_path
 
-    if strategy == "clone_then_copy":
+    if strategy in {"auto", "clone_then_copy"} and sys.platform == "darwin":
         result = subprocess.run(
             ["cp", "-c", str(source_path), str(dest_path)],
             capture_output=True,

@@ -371,11 +371,57 @@ class ImporterTest(unittest.TestCase):
                 / "recordings"
                 / "audio"
                 / "derived"
-                / "normalized"
+                / "timeline"
                 / "2026"
                 / "06"
                 / "08"
                 / "20260608_112048_TX02_MIC001_orig.wav",
+            )
+            self.assertTrue(derived.derived_path.exists())
+
+    def test_derive_mirrored_recording_can_use_dji_organized_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source_mount = root / "MIC 01"
+            source_dir = source_mount / "TX_MIC001_20260308_143058"
+            source_dir.mkdir(parents=True)
+            source_file = source_dir / "TX02_MIC001_20260608_112048_orig.wav"
+            source_file.write_bytes(b"not-a-real-wav")
+            catalog = Catalog(root / "recordings" / "audio" / "db" / "recordings.sqlite3")
+
+            mirrored = mirror_recording_to_raw(
+                source_path=source_file,
+                source_mount_path=source_mount,
+                source_parent_folder=source_dir.name,
+                volume_label="MIC 01",
+                recordings_root=root / "recordings" / "audio",
+                tmp_root=root / "recordings" / "audio" / "tmp",
+                catalog=catalog,
+                log_path=root / "micSync" / "logs" / "runs.log",
+            )
+
+            derived = derive_mirrored_recording(
+                raw_path=mirrored.raw_path,
+                source_file_id=mirrored.source_file_id,
+                catalog=catalog,
+                log_path=root / "micSync" / "logs" / "runs.log",
+                enable_derived_outputs=True,
+                derived_root=root / "recordings" / "audio" / "organized",
+                derived_outputs_strategy="copy_only",
+                organized_layout="dji",
+                segment_cadence_seconds=1800,
+                segment_group_tolerance_ms=1000,
+            )
+
+            self.assertEqual(
+                derived.derived_path,
+                root
+                / "recordings"
+                / "audio"
+                / "organized"
+                / "dji"
+                / "TX_MIC001_20260308_143058"
+                / "TX02_MIC001_20260608_112048_orig.wav",
             )
             self.assertTrue(derived.derived_path.exists())
 

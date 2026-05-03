@@ -1,270 +1,240 @@
 # micSync
 
-`micSync` is a host-side importer for autonomously importing DJI Mic internal recordings in the background.
+`micSync` is an auto importer for DJI Mic internal recordings.
 
-It is a series of python scripts designed for a Mac host that receives Apple Shortcut styled "drive connected" triggers, mirrors new source files into a canonical local raw store, derives a recording database from that raw mirror, and optionally creates normalized browse copies in a separate derived tree without taking up additional space.
+It is designed for a simple workflow: plug in a DJI Mic receiver or transmitter, let a macOS Shortcut trigger the importer, and get verified local copies under your Downloads folder without manually browsing the device.
 
-## Status
+## Scope
 
-The current design assumes:
-
-- macOS host runtime
-- DJI Mic 3 styled recording names such as `TX02_MIC002_20230820_235500_orig.wav`
-- source-first ingestion into a local raw mirror
-- SQLite metadata catalog
-- optional derived outputs that are not required for DB integrity
-
-## Features
-
-- Mirrors source recordings into a local `raw/` tree without modifying the device
-- Groups `_orig` and `_edit` source files into the same `segment`
-- Groups adjacent 30-minute segments into the same `take` when timing is continuous enough
-- Handles duplicate Shortcut triggers and frozen processes with a singleton lock and rescan marker
-- Supports resumable runs and duplicate detection
-- Prefilters exact duplicates before mirroring so queued-byte estimates and per-file mirror progress reflect only new copies
-- Immediately ejects a volume after scan when every detected file on that volume is already mirrored and auto-eject is enabled
-- Detects supported macOS/Linux/Windows trash paths and marks those recordings hidden in the catalog
-- Emits lifecycle logs for scan, duplicate preflight, derive, clipboard, notification, and eject planning in addition to per-file progress rows
-- Sends macOS notifications
-- Can auto-eject source volumes after a clean verified mirror stage
-- Can optionally create normalized browse copies under `derived/`
-
-## Storage Model
-
-Service-local runtime state:
+`micSync` focuses on DJI Mic style WAV files such as:
 
 ```text
-$NEXUS_DATA_ROOT/micSync/
+TX02_MIC001_20260608_112048_orig.wav
+TX02_MIC001_20260608_112048_edit.wav
+TX00_MIC014_20260608_112048.wav
+```
+
+It does four things:
+
+- scans mounted devices for DJI recording files
+- mirrors new files into a durable local `raw/` store without modifying the device
+- records import metadata in SQLite
+- optionally creates an organized browsing copy tree
+
+The recommended setup is macOS + Shortcuts. The core CLI can also run on Windows or Linux when you pass explicit source paths. Notifications, auto-eject, clipboard, and audio duration probing use macOS system tools when available.
+
+## Storage
+
+Default home:
+
+```text
+~/Downloads/micSync/
+```
+
+Default structure:
+
+```text
+~/Downloads/micSync/
   config/
-  logs/
-  run/
+    micsync.env
+  runtime/
+    logs/
+    run/
+  recordings/
+    raw/
+    organized/
+    db/
+    tmp/
 ```
 
-Shared audio recording corpus:
+`raw/` is the local source of truth. `organized/` is disposable and can be regenerated from `raw/` plus the SQLite catalog.
+
+By default, organized outputs use the `timeline` layout:
 
 ```text
-$NEXUS_DATA_ROOT/recordings/audio/
-  raw/
-  db/
-  derived/
+recordings/organized/timeline/YYYY/MM/DD/YYYYMMDD_HHMMSS_TXNN_MICNNN[_variant].wav
 ```
 
-Canonical layers:
+You can switch to `dji` layout:
 
-- `raw/`: mirrored original files copied from the device
-- `db/`: SQLite metadata catalog
+```text
+recordings/organized/dji/TX_MIC001_YYYYMMDD_HHMMSS/TXNN_MICNNN_YYYYMMDD_HHMMSS[_variant].wav
+```
 
-Optional layer:
+The layout is controlled globally with `MICSYNC_ORGANIZED_LAYOUT`. Supported values:
 
-- `derived/`: normalized or future generated outputs, disposable and rebuildable, uses APFS clone to duplicate files without causing extra storage overhead
+- `timeline`: date-first browsing layout, recommended for most people
+- `dji`: keeps organized copies closer to the DJI folder shape
+
+Changing the layout does not rewrite `raw/`. To switch layouts, remove or archive `recordings/organized/`, change `MICSYNC_ORGANIZED_LAYOUT`, then rerun derivation/import so organized copies are recreated.
+
+## Disk Usage
+
+`micSync` always makes a raw mirror, so expect at least one local copy of every imported recording.
+
+Organized outputs add a second visible file tree:
+
+- On macOS with APFS, `MICSYNC_DERIVED_OUTPUTS_STRATEGY=auto` uses clone-on-write copies when available. Finder and simple directory size tools may show roughly double usage, but APFS stores shared extents until one copy changes.
+- On non-APFS filesystems, Windows, and Linux, `auto` falls back to ordinary copies. Organized outputs then consume real extra disk space.
+- Set `MICSYNC_ENABLE_DERIVED_OUTPUTS=false` if you only want the raw mirror and metadata database.
+
+## Configuration
+
+The wrapper reads configuration from:
+
+```text
+$MICSYNC_HOME/config/micsync.env
+```
+
+If `MICSYNC_HOME` is not set, it defaults to:
+
+```text
+~/Downloads/micSync
+```
+
+Common settings:
+
+```dotenv
+MICSYNC_HOME=$HOME/Downloads/micSync
+MICSYNC_RUNTIME_ROOT=$MICSYNC_HOME/runtime
+MICSYNC_RECORDINGS_ROOT=$MICSYNC_HOME/recordings
+MICSYNC_RECORDINGS_DB_PATH=$MICSYNC_HOME/recordings/db/recordings.sqlite3
+MICSYNC_EXTENSION_ALLOWLIST=.wav
+MICSYNC_ENABLE_DERIVED_OUTPUTS=true
+MICSYNC_DERIVED_OUTPUTS_STRATEGY=auto
+MICSYNC_ORGANIZED_LAYOUT=timeline
+MICSYNC_SEGMENT_CADENCE_SECONDS=1800
+MICSYNC_SEGMENT_GROUP_TOLERANCE_MS=1000
+MICSYNC_NOTIFY=true
+MICSYNC_EJECT=true
+```
+
+Runtime flags can override common settings for a single run:
+
+```bash
+./scripts/micSync.sh --derived false --notify false --eject false
+```
+
+## Running
+
+Install/use with Python 3.11 or newer. During development, run from the checkout:
+
+```bash
+PYTHONPATH=src python3.11 -m micsync.cli --help
+```
+
+Or with `uv`:
+
+```bash
+PYTHONPATH=src uv run --python 3.11 python -m micsync.cli --help
+```
+
+The wrapper is the recommended entrypoint:
+
+```bash
+./scripts/micSync.sh
+```
+
+Normal wrapper runs detach into the background and return immediately. That is intentional for Shortcuts, because Shortcut actions should not have to wait for a full import.
+
+Useful examples:
+
+```bash
+./scripts/micSync.sh --source-volume "/Volumes/MIC 01"
+./scripts/micSync.sh --source-volume "/Volumes/MIC 01" --source-volume "/Volumes/MIC 02"
+./scripts/micSync.sh --derived false
+./scripts/micSync.sh --stop
+```
+
+Foreground bounded validation:
+
+```bash
+MICSYNC_HOME=/tmp/micsync-live-test \
+PYTHONPATH=src \
+python3.11 -m micsync.cli \
+  --source-volume "/Volumes/MIC 01" \
+  --max-file-size-mb 10 \
+  --notify false \
+  --eject false
+```
+
+The bounded validation contract is:
+
+- source volumes are read-only
+- destination is disposable
+- file size is capped so you do not accidentally ingest a full device during testing
+
+## Shortcuts Integration
+
+Recommended macOS Shortcut shape:
+
+1. Trigger: external drive connected.
+2. Action: run shell script.
+3. Shell: `/bin/zsh`.
+4. Script:
+
+```bash
+cd /path/to/micSync
+./scripts/micSync.sh
+```
+
+If your Shortcut can pass a mounted volume path, scope the run explicitly:
+
+```bash
+cd /path/to/micSync
+./scripts/micSync.sh --source-volume "$1"
+```
+
+Explicit `--source-volume` is optional on macOS because `micSync` can scan mounted volumes, but it is useful when permissions or timing around a newly mounted device are inconsistent.
+
+Concurrent Shortcut triggers collapse into one active run through a lock/rescan mechanism. When a run starts, `micSync` tries to copy the exact stop command to the clipboard and includes the stop hint in the notification.
+
+## Platform Notes
+
+macOS provides the most automated workflow.
+
+- Shortcuts automation is macOS-specific.
+- Notifications use `osascript`.
+- Clipboard stop-command copy uses `pbcopy`.
+- Auto-eject uses `diskutil`.
+- Duration probing uses `afinfo`.
+- APFS clone copies use `cp -c`.
+
+On Windows and Linux, run the CLI with explicit `--source-volume` paths and set `MICSYNC_NOTIFY=false` and `MICSYNC_EJECT=false`. Organized outputs still work, but `auto` uses ordinary file copies.
 
 ## Database Model
 
-The current canonical model is:
+The catalog uses this shape:
 
 ```text
 source_files -> segments -> takes
 ```
 
 - `source_files`: one row per mirrored raw file
-- `segments`: one recording chunk, can have one or more variants like `_orig` and `_edit`
-- `takes`: one logical grouped recording for timeline and browsing, since DJI Mic automatically cuts recordings into 30min chunks
-- `hidden`: a catalog visibility flag used when a source file came from a device trash path; hidden rows stay in the DB but should be excluded by default in UI layers
+- `segments`: one recording chunk, with `_orig` and `_edit` variants grouped together
+- `takes`: one logical recording grouped from adjacent 30-minute chunks
+- `hidden`: records files found under supported trash paths without showing them in normal organized output
 
-Future enrichment tables such as transcripts, summaries, or tags should attach to the right canonical level:
-
-- `source_file_id` when provenance is variant-specific
-- `segment_id` when the enrichment describes the physical chunk
-- `take_id` when it describes the grouped logical recording
-
-Timestamp policy:
-
-- Recording timeline fields such as `recording_start_at`, `take_start_at`, and `segment_start_at` reflect the recorder's local wall-clock capture time.
-- Operational fields such as anomaly creation and import bookkeeping timestamps are stored as local ISO 8601 timestamps with a UTC offset, for example `2026-03-19T19:41:52-07:00`.
-
-## How It Works
-
-Each run has two stages.
-
-1. Mirror stage
-   `micSync` scans mounted volumes, copies matching recordings into `raw/`, verifies the copy, records a `source_files` row, and can eject the device after a clean run.
-
-2. Derive stage
-   `micSync` reads the local mirrored raw files, parses timestamps and variants, updates `segments` and `takes`, and optionally generates normalized files under `derived/`.
-   Pending derivations are processed from the database in ascending `recording_start_at` order so forward-only grouping follows time instead of raw path order.
-   Files detected under supported device trash paths still derive DB records, but they are marked `hidden` and do not generate normalized outputs.
-
-The important boundary is that the raw mirror becomes the local system of record. Once a file has been mirrored and verified, the database and optional derived outputs can be rebuilt without needing the mic to remain connected.
-
-## Naming Rules
-
-Supported source pattern:
-
-```text
-TXNN_MICNNN_YYYYMMDD_HHMMSS[_orig|_edit].wav
-```
-
-Examples:
-
-- `TX02_MIC001_20260608_112048_orig.wav`
-- `TX02_MIC001_20260608_112048_edit.wav`
-- `TX00_MIC014_20260608_112048.wav`
-
-When derived outputs are enabled, the normalized path format is:
-
-```text
-derived/normalized/YYYY/MM/DD/YYYYMMDD_HHMMSS_TXNN_MICNNN[_variant].wav
-```
-
-## Configuration
-
-Tracked template:
-
-- `.env.template`
-
-Runtime config file:
-
-- Deploy: `$NEXUS_DATA_ROOT/micSync/config/micsync.env`
-
-Important variables:
-
-```dotenv
-MICSYNC_RUNTIME_ROOT=$NEXUS_DATA_ROOT/micSync
-MICSYNC_RECORDINGS_ROOT=$NEXUS_DATA_ROOT/recordings/audio
-MICSYNC_RECORDINGS_DB_PATH=$NEXUS_DATA_ROOT/recordings/audio/db/recordings.sqlite3
-MICSYNC_EXTENSION_ALLOWLIST=.wav
-MICSYNC_ENABLE_DERIVED_OUTPUTS=true
-MICSYNC_DERIVED_OUTPUTS_STRATEGY=clone_then_copy
-MICSYNC_SEGMENT_CADENCE_SECONDS=1800
-MICSYNC_SEGMENT_GROUP_TOLERANCE_MS=1000
-MICSYNC_NOTIFY=true
-MICSYNC_EJECT=true
-```
-Note: `NEXUS_DATA_ROOT` can point at any parent directory where you want `micSync/` and `recordings/` created.
-
-Notes:
-
-- `MICSYNC_ENABLE_DERIVED_OUTPUTS=true` enables `derived/normalized/` by default.
-- `micSync` disables derived output automatically for a run when the shared recordings root is not on APFS, because clone-backed normalized files require APFS support.
-- `MICSYNC_DERIVED_OUTPUTS_STRATEGY=clone_then_copy` prefers APFS clone-on-write on macOS and falls back to ordinary copy.
-- `MICSYNC_SEGMENT_GROUP_TOLERANCE_MS=1000` exists because real DJI 30-minute chunks are not perfectly exact at the millisecond level.
-
-## Running
-
-Standalone wrapper script:
-
-```bash
-./scripts/micSync.sh
-```
-
-Common Shortcut-oriented variants:
-
-```bash
-./scripts/micSync.sh --derived false
-./scripts/micSync.sh --source-volume "/Volumes/MIC 01"
-./scripts/micSync.sh --source-volume "/Volumes/MIC 01" --source-volume "/Volumes/MIC 02"
-```
-
-For normal imports, the wrapper now launches `micSync` in detached mode and returns immediately to the caller. That is the intended path for macOS Shortcuts so Shortcut execution does not wait for the full mirror-and-derive run.
-
-It sets `NEXUS_DATA_ROOT` for both the initial trigger process and the detached child.
-
-`NEXUS_DATA_ROOT` Resolution:
-
-1. If `micSync` is being launched by a larger setup that provides `NEXUS_DATA_ROOT`, the wrapper uses it directly.
-2.  Otherwise, the wrapper tells the program to store data at `./data` in this repo.
-
-Example interactive foreground run with explicit roots:
-
-```bash
-NEXUS_DATA_ROOT=/tmp/micsync-test \
-PYTHONPATH=src \
-python3 -m micsync.cli \
-  --max-file-size-mb 10 \
-  --notify false \
-  --eject false
-```
-
-Foreground CLI runs print progress to stdout and still append the persistent run log under `$NEXUS_DATA_ROOT/micSync/logs/`.
-
-Example using the built-in defaults:
-
-```bash
-./scripts/micSync.sh --help
-```
-
-Graceful stop request:
-
-```bash
-./scripts/micSync.sh --stop
-```
-
-The wrapper infers its root from its own location on disk, not from the caller's current working directory.
-
-## Shortcuts Integration
-
-`micSync` is intended to be triggered by macOS Shortcuts when an external drive connects.
-
-Recommended pattern:
-
-- Shortcut calls `./scripts/micSync.sh`
-- the wrapper launches `micSync` via `python3 -m micsync.cli --detach`
-- the detached child inherits the same `NEXUS_DATA_ROOT` and `PYTHONPATH` values as the trigger process
-- `micSync` scans all mounted volumes by default, or only the repeatable `--source-volume` paths when provided
-- Shortcut can pass `--derived true` or `--derived false` to toggle normalized output for that run
-- concurrent triggers collapse into one active run via the lock/rescan mechanism
-
-This means the automation does not need to reliably pass a specific drive path for correctness, but it can if you want to scope a run to specific mounted volumes.
-
-When an import starts, `micSync` copies the exact stop command for that run to the clipboard when possible and includes that fact in the start notification. Running the copied command, or `./scripts/micSync.sh --stop`, requests a graceful stop: the current file finishes first, then the importer skips the remaining work, releases the lock, and sends a stopped notification.
+Recording timeline fields use the recorder's local wall-clock capture time. Operational fields use local ISO 8601 timestamps with UTC offsets.
 
 ## Testing
 
-Unit tests:
-
 ```bash
-cd /path/to/micSync
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
+python3.11 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-Bounded live-device validation:
+With `uv`:
 
 ```bash
-NEXUS_DATA_ROOT=/tmp/micsync-live-test \
-PYTHONPATH=src \
-python3 -m micsync.cli \
-  --max-file-size-mb 10 \
-  --notify false \
-  --eject false
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
+uv run --python 3.11 python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-The live validation contract is:
+## Boundaries
 
-- read-only behavior toward source volumes
-- disposable local destination
-- bounded file-size filter to avoid ingesting an entire device during tests
-
-## Stop Semantics
-
-- `./scripts/micSync.sh --stop` is the preferred way to stop a run
-- `python3 -m micsync.cli --stop` is equivalent when you already have the same `NEXUS_DATA_ROOT` environment in scope
-- the importer stops between files and phases, not in the middle of a file copy
-- copied files are written through temp paths and `fsync` before promotion, so interrupted runs should not leave corrupted final files
-- force-terminating the process is usually recoverable, but it is not the same as a graceful stop because you can lose the final notification, leave temp files behind, and skip a clean lock handoff
-
-## Limitations
-
-- macOS-specific host behavior
-- Shortcut-triggered, not background disk-watcher driven
-- no source deletion in v1
-- no transcript, tag, or UI layers in v1
-- `derived/` is optional and not tracked in the DB
-
-## Future Work
-
-- safe delete-from-device workflow after verified mirroring
-- transcript and enrichment tables
-- timeline/browser UI
-- hotspot-aware remote processing controls
-- battery-aware import prompts
-- more sophisticated derived outputs such as compression or merged exports
+- `micSync` is a file importer, not a media manager.
+- No source deletion from the DJI device.
+- No transcript, tag, UI, or sync layer.
+- Organized outputs are optional and rebuildable.
+- Windows/Linux support is CLI-oriented and less automated than macOS.

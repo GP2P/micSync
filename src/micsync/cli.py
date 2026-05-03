@@ -34,7 +34,6 @@ from micsync.notify import (
     build_start_message,
     build_stopped_message,
     copy_to_clipboard,
-    open_log_in_console,
     send_notification,
 )
 from micsync.scanner import scan_candidates
@@ -62,7 +61,7 @@ ZERO_CANDIDATE_SCAN_MAX_RETRIES = 2
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="micSync",
-        description="Import DJI Mic recordings into the shared recordings root.",
+        description="Import DJI Mic recordings into a local recordings store.",
     )
     parser.add_argument("--detach", action="store_true")
     parser.add_argument("--max-file-size-mb", type=int, default=None)
@@ -82,12 +81,10 @@ def _parse_optional_bool(value: str | None) -> bool | None:
 
 
 def _load_config(args: argparse.Namespace):
-    nexus_data_root = Path(
-        os.environ.get("NEXUS_DATA_ROOT", str(Path.home() / "nexus-data"))
-    )
+    micsync_home = Path(os.environ.get("MICSYNC_HOME", str(Path.home() / "Downloads" / "micSync")))
     env = dict(os.environ)
-    env.update(load_env_file(nexus_data_root / "micSync" / "config" / "micsync.env"))
-    config = build_config(nexus_data_root=nexus_data_root, env=env)
+    env.update(load_env_file(micsync_home / "config" / "micsync.env"))
+    config = build_config(micsync_home=micsync_home, env=env)
     return apply_runtime_overrides(
         config,
         max_file_size_mb=args.max_file_size_mb,
@@ -102,7 +99,7 @@ def _service_root() -> Path:
 
 
 def _data_root(config) -> Path:
-    return Path(os.environ.get("NEXUS_DATA_ROOT", str(config.runtime_root.parent)))
+    return Path(os.environ.get("MICSYNC_HOME", str(config.runtime_root.parent)))
 
 
 def _detached_child_argv(argv: list[str]) -> list[str]:
@@ -201,6 +198,8 @@ def _recordings_root_supports_clone(path: Path) -> tuple[bool, str | None]:
 def _preflight_derived_outputs(config) -> tuple[bool, str | None]:
     if not config.enable_derived_outputs:
         return False, None
+    if config.derived_outputs_strategy in {"copy_only", "auto"}:
+        return True, None
     return _recordings_root_supports_clone(config.recordings_root)
 
 
@@ -421,10 +420,7 @@ def run_import(args: argparse.Namespace) -> int:
             )
             notification_message = message
             if severity == "fail":
-                if open_log_in_console(log_path):
-                    notification_message = f"{message} | opened log in Console"
-                else:
-                    notification_message = f"{message} | log: {log_path}"
+                notification_message = f"{message} | log: {log_path}"
             emit_notification(title=notification_title, message=notification_message)
 
         log_event(
@@ -768,6 +764,7 @@ def run_import(args: argparse.Namespace) -> int:
                         enable_derived_outputs=config.enable_derived_outputs,
                         derived_root=config.recordings_derived_root,
                         derived_outputs_strategy=config.derived_outputs_strategy,
+                        organized_layout=config.organized_layout,
                         segment_cadence_seconds=config.segment_cadence_seconds,
                         segment_group_tolerance_ms=config.segment_group_tolerance_ms,
                     )

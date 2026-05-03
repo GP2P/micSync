@@ -12,12 +12,15 @@ class EjectResult:
 
 
 def eject_volume(volume_root: Path) -> EjectResult:
-    result = subprocess.run(
-        ["diskutil", "eject", str(volume_root)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["diskutil", "eject", str(volume_root)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return EjectResult(ok=False, detail="diskutil is unavailable")
     detail = (result.stderr or result.stdout or "").strip() or None
     return EjectResult(
         ok=result.returncode == 0,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+import os
 from pathlib import Path
 from typing import Mapping
 
@@ -24,6 +25,7 @@ class Config:
     stale_lock_timeout_seconds: int
     notify: bool
     eject: bool
+    organized_layout: str = "timeline"
 
 
 def _coerce_optional_int(value: str | None) -> int | None:
@@ -38,16 +40,31 @@ def _coerce_bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def build_config(nexus_data_root: Path, env: Mapping[str, str]) -> Config:
-    runtime_root = Path(env.get("MICSYNC_RUNTIME_ROOT", str(nexus_data_root / "micSync")))
-    recordings_root = Path(
-        env.get("MICSYNC_RECORDINGS_ROOT", str(nexus_data_root / "recordings" / "audio"))
+def _expand_path(value: str, env: Mapping[str, str]) -> Path:
+    expanded = value
+    for _ in range(2):
+        for key, replacement in env.items():
+            expanded = expanded.replace(f"${key}", replacement)
+            expanded = expanded.replace(f"${{{key}}}", replacement)
+    return Path(os.path.expandvars(expanded)).expanduser()
+
+
+def build_config(micsync_home: Path, env: Mapping[str, str]) -> Config:
+    path_env = {"HOME": str(Path.home()), "MICSYNC_HOME": str(micsync_home), **env}
+    runtime_root = _expand_path(
+        env.get("MICSYNC_RUNTIME_ROOT", str(micsync_home / "runtime")),
+        path_env,
     )
-    recordings_db_path = Path(
+    recordings_root = _expand_path(
+        env.get("MICSYNC_RECORDINGS_ROOT", str(micsync_home / "recordings")),
+        path_env,
+    )
+    recordings_db_path = _expand_path(
         env.get(
             "MICSYNC_RECORDINGS_DB_PATH",
             str(recordings_root / "db" / "recordings.sqlite3"),
-        )
+        ),
+        path_env,
     )
     extension_allowlist = tuple(
         part.strip()
@@ -58,7 +75,7 @@ def build_config(nexus_data_root: Path, env: Mapping[str, str]) -> Config:
         runtime_root=runtime_root,
         recordings_root=recordings_root,
         recordings_raw_root=recordings_root / "raw",
-        recordings_derived_root=recordings_root / "derived",
+        recordings_derived_root=recordings_root / "organized",
         recordings_db_path=recordings_db_path,
         recordings_tmp_root=recordings_root / "tmp",
         max_file_size_mb=_coerce_optional_int(env.get("MICSYNC_MAX_FILE_SIZE_MB")),
@@ -70,8 +87,9 @@ def build_config(nexus_data_root: Path, env: Mapping[str, str]) -> Config:
         ),
         derived_outputs_strategy=env.get(
             "MICSYNC_DERIVED_OUTPUTS_STRATEGY",
-            "clone_then_copy",
+            "auto",
         ),
+        organized_layout=env.get("MICSYNC_ORGANIZED_LAYOUT", "timeline"),
         segment_cadence_seconds=int(env.get("MICSYNC_SEGMENT_CADENCE_SECONDS", "1800")),
         segment_group_tolerance_ms=int(
             env.get("MICSYNC_SEGMENT_GROUP_TOLERANCE_MS", "1000")

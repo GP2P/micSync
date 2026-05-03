@@ -33,7 +33,7 @@ def build_start_message(
 def build_stop_command(*, service_root: Path, data_root: Path) -> str:
     script_path = service_root / "scripts" / "micSync.sh"
     return (
-        f'NEXUS_DATA_ROOT={shlex.quote(str(data_root))} '
+        f'MICSYNC_HOME={shlex.quote(str(data_root))} '
         f'{shlex.quote(str(script_path))} --stop'
     )
 
@@ -102,34 +102,30 @@ def build_stopped_message(
 
 
 def copy_to_clipboard(text: str) -> bool:
-    result = subprocess.run(
-        ["pbcopy"],
-        input=text,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["pbcopy"],
+            input=text,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False
     return result.returncode == 0
 
 
 def send_notification(*, title: str, message: str) -> None:
-    subprocess.run(
-        [
-            "osascript",
-            "-e",
-            f'display notification "{message}" with title "{title}"',
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-
-def open_log_in_console(log_path: Path) -> bool:
-    result = subprocess.run(
-        ["open", "-a", "Console", str(log_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
+    try:
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                f'display notification "{message}" with title "{title}"',
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return

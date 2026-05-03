@@ -4,6 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "micSync"
-version = "0.1.0"
+version = "1.0.0"
 description = "Host-side importer for DJI Mic recordings"
+readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    { name = "GP2P" },
+]
+keywords = ["audio", "dji", "importer", "macos", "shortcuts"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: System :: Archiving",
+    "Topic :: Utilities",
+]
+
+[project.scripts]
+micsync = "micsync.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

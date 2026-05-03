@@ -9,7 +9,7 @@ from micsync.notify import (
     build_start_message,
     build_stopped_message,
     copy_to_clipboard,
-    open_log_in_console,
+    send_notification,
 )
 
 
@@ -81,7 +81,7 @@ class NotifyTest(unittest.TestCase):
         )
         self.assertEqual(
             command,
-            "NEXUS_DATA_ROOT=/var/lib/micSync-data "
+            "MICSYNC_HOME=/var/lib/micSync-data "
             "/srv/custom-checkout/scripts/micSync.sh --stop",
         )
 
@@ -101,8 +101,12 @@ class NotifyTest(unittest.TestCase):
         self.assertTrue(copy_to_clipboard("hello"))
         mock_run.assert_called_once()
 
-    @patch("micsync.notify.subprocess.run")
-    def test_open_log_in_console_returns_true_on_success(self, mock_run) -> None:
-        mock_run.return_value.returncode = 0
-        self.assertTrue(open_log_in_console(Path("/tmp/runs.log")))
+    @patch("micsync.notify.subprocess.run", side_effect=FileNotFoundError)
+    def test_copy_to_clipboard_returns_false_when_pbcopy_is_unavailable(self, mock_run) -> None:
+        self.assertFalse(copy_to_clipboard("hello"))
+        mock_run.assert_called_once()
+
+    @patch("micsync.notify.subprocess.run", side_effect=FileNotFoundError)
+    def test_send_notification_ignores_missing_osascript(self, mock_run) -> None:
+        send_notification(title="micSync", message="done")
         mock_run.assert_called_once()

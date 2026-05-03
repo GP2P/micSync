@@ -13,6 +13,7 @@ from pathlib import Path
 
 from micsync.catalog import Catalog
 from micsync.cli import (
+    _preflight_derived_outputs,
     _recordings_root_supports_clone,
     _should_retry_zero_candidate_scan,
     build_parser,
@@ -70,23 +71,52 @@ class CliSmokeTest(unittest.TestCase):
 </plist>
 """
 
-        with mock.patch("micsync.cli.subprocess.run") as run_mock:
-            run_mock.side_effect = [
-                mock.Mock(returncode=0, stdout=df_output, stderr=""),
-                mock.Mock(returncode=0, stdout=diskutil_output, stderr=b""),
-            ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recordings_root = Path(tmpdir) / "recordings" / "audio"
+            recordings_root.mkdir(parents=True)
 
-            supported, reason = _recordings_root_supports_clone(
-                Path("~/nexus-data/recordings/audio")
-            )
+            with mock.patch("micsync.cli.subprocess.run") as run_mock:
+                run_mock.side_effect = [
+                    mock.Mock(returncode=0, stdout=df_output, stderr=""),
+                    mock.Mock(returncode=0, stdout=diskutil_output, stderr=b""),
+                ]
+
+                supported, reason = _recordings_root_supports_clone(recordings_root)
 
         self.assertTrue(supported)
         self.assertIsNone(reason)
-        self.assertEqual(run_mock.call_args_list[0].args[0], ["df", "-P", "~/nexus-data/recordings/audio"])
+        self.assertEqual(run_mock.call_args_list[0].args[0], ["df", "-P", str(recordings_root)])
         self.assertEqual(
             run_mock.call_args_list[1].args[0],
             ["diskutil", "info", "-plist", "/System/Volumes/Data"],
         )
+
+    def test_auto_derived_outputs_use_copy_without_apfs_preflight(self) -> None:
+        config = Config(
+            runtime_root=Path("/tmp/micSync/runtime"),
+            recordings_root=Path("/tmp/micSync/recordings"),
+            recordings_raw_root=Path("/tmp/micSync/recordings/raw"),
+            recordings_derived_root=Path("/tmp/micSync/recordings/organized"),
+            recordings_db_path=Path("/tmp/micSync/recordings/db/recordings.sqlite3"),
+            recordings_tmp_root=Path("/tmp/micSync/recordings/tmp"),
+            max_file_size_mb=None,
+            extension_allowlist=(".wav",),
+            variant_policy="all",
+            enable_derived_outputs=True,
+            derived_outputs_strategy="auto",
+            segment_cadence_seconds=1800,
+            segment_group_tolerance_ms=1000,
+            stale_lock_timeout_seconds=300,
+            notify=False,
+            eject=False,
+        )
+
+        with mock.patch("micsync.cli._recordings_root_supports_clone") as clone_probe:
+            enabled, reason = _preflight_derived_outputs(config)
+
+        self.assertTrue(enabled)
+        self.assertIsNone(reason)
+        clone_probe.assert_not_called()
 
     def test_build_parser_accepts_repeatable_source_volumes_and_derived_toggle(self) -> None:
         args = build_parser().parse_args(
@@ -116,9 +146,9 @@ class CliSmokeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("usage", result.stdout.lower())
 
-    def test_standalone_wrapper_prefers_explicit_data_root(self) -> None:
+    def test_standalone_wrapper_prefers_explicit_home(self) -> None:
         env = os.environ.copy()
-        env["NEXUS_DATA_ROOT"] = "/tmp/micSync-test-data"
+        env["MICSYNC_HOME"] = "/tmp/micSync-test-data"
         result = subprocess.run(
             [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--help"],
             cwd=SERVICE_ROOT,
@@ -131,7 +161,7 @@ class CliSmokeTest(unittest.TestCase):
 
     def test_standalone_wrapper_works_without_preexisting_environment(self) -> None:
         env = os.environ.copy()
-        env.pop("NEXUS_DATA_ROOT", None)
+        env.pop("MICSYNC_HOME", None)
         result = subprocess.run(
             [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--help"],
             cwd=SERVICE_ROOT,
@@ -145,7 +175,7 @@ class CliSmokeTest(unittest.TestCase):
     def test_standalone_wrapper_stop_command_exits_successfully(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             env = os.environ.copy()
-            env.pop("NEXUS_DATA_ROOT", None)
+            env.pop("MICSYNC_HOME", None)
             env["HOME"] = tmpdir
             result = subprocess.run(
                 [str(SERVICE_ROOT / "scripts" / "micSync.sh"), "--stop"],
@@ -157,19 +187,12 @@ class CliSmokeTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertIn("micSync", result.stdout)
 
-    def test_standalone_wrapper_uses_home_env_file_for_data_root(self) -> None:
+    def test_standalone_wrapper_stop_uses_explicit_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_root = Path(tmpdir)
-            home_dir = tmp_root / "home"
-            data_root = tmp_root / "nexus-data"
-            config_dir = home_dir / ".config" / "nexus"
-            run_dir = data_root / "micSync" / "run"
-            config_dir.mkdir(parents=True)
+            home_dir = tmp_root / "micSync-home"
+            run_dir = home_dir / "runtime" / "run"
             run_dir.mkdir(parents=True)
-            (config_dir / "env.sh").write_text(
-                f'export NEXUS_DATA_ROOT="{data_root}"\n',
-                encoding="utf-8",
-            )
             (run_dir / "active.lock").write_text(
                 json.dumps(
                     {
@@ -184,8 +207,7 @@ class CliSmokeTest(unittest.TestCase):
             )
 
             env = os.environ.copy()
-            env.pop("NEXUS_DATA_ROOT", None)
-            env["HOME"] = str(home_dir)
+            env["MICSYNC_HOME"] = str(home_dir)
             result = subprocess.run(
                 [
                     str(SERVICE_ROOT / "scripts" / "micSync.sh"),
@@ -201,7 +223,7 @@ class CliSmokeTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertIn("micSync stop requested", result.stdout)
 
-    def test_standalone_wrapper_detaches_normal_import_and_preserves_data_root(self) -> None:
+    def test_standalone_wrapper_detaches_normal_import_and_preserves_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_root = Path(tmpdir)
             fake_bin = tmp_root / "bin"
@@ -223,7 +245,7 @@ class CliSmokeTest(unittest.TestCase):
                         "    json.dumps(",
                         "        {",
                         '            "argv": sys.argv[1:],',
-                        '            "NEXUS_DATA_ROOT": os.environ.get("NEXUS_DATA_ROOT"),',
+                        '            "MICSYNC_HOME": os.environ.get("MICSYNC_HOME"),',
                         "        }",
                         "    ),",
                         '    encoding="utf-8",',
@@ -238,7 +260,7 @@ class CliSmokeTest(unittest.TestCase):
 
             env = os.environ.copy()
             env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env["NEXUS_DATA_ROOT"] = "/tmp/micSync-data-root"
+            env["MICSYNC_HOME"] = "/tmp/micSync-data-root"
             result = subprocess.run(
                 [
                     str(SERVICE_ROOT / "scripts" / "micSync.sh"),
@@ -275,7 +297,7 @@ class CliSmokeTest(unittest.TestCase):
                     "false",
                 ],
             )
-            self.assertEqual(capture["NEXUS_DATA_ROOT"], "/tmp/micSync-data-root")
+            self.assertEqual(capture["MICSYNC_HOME"], "/tmp/micSync-data-root")
 
     def test_wrapper_exports_pythonpath_for_child(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -314,7 +336,7 @@ class CliSmokeTest(unittest.TestCase):
 
             env = os.environ.copy()
             env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env.pop("NEXUS_DATA_ROOT", None)
+            env.pop("MICSYNC_HOME", None)
             env["HOME"] = str(tmp_root / "home")
             result = subprocess.run(
                 [
@@ -363,7 +385,7 @@ class CliSmokeTest(unittest.TestCase):
                         "    json.dumps(",
                         "        {",
                         '            "argv": sys.argv[1:],',
-                        '            "NEXUS_DATA_ROOT": os.environ.get("NEXUS_DATA_ROOT"),',
+                        '            "MICSYNC_HOME": os.environ.get("MICSYNC_HOME"),',
                         "        }",
                         "    ),",
                         '    encoding="utf-8",',
@@ -378,7 +400,7 @@ class CliSmokeTest(unittest.TestCase):
 
             env = os.environ.copy()
             env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            env.pop("NEXUS_DATA_ROOT", None)
+            env.pop("MICSYNC_HOME", None)
             env["HOME"] = str(tmp_root / "home")
             result = subprocess.run(
                 [
@@ -394,7 +416,7 @@ class CliSmokeTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0)
             capture = json.loads(capture_path.read_text(encoding="utf-8"))
-            self.assertEqual(capture["NEXUS_DATA_ROOT"], str(standalone_root / "data"))
+            self.assertEqual(capture["MICSYNC_HOME"], str(tmp_root / "home" / "Downloads" / "micSync"))
 
 
 class CliRunTest(unittest.TestCase):
@@ -2448,7 +2470,7 @@ class CliRunTest(unittest.TestCase):
             [call.kwargs["title"] for call in send_notification.call_args_list],
         )
 
-    def test_derive_failure_persists_anomaly_and_falls_back_to_log_path_when_console_open_fails(self) -> None:
+    def test_derive_failure_persists_anomaly_and_reports_log_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             recordings_root = tmp_path / "recordings"
@@ -2532,7 +2554,6 @@ class CliRunTest(unittest.TestCase):
                     "micsync.cli.derive_mirrored_recording",
                     side_effect=RuntimeError("derive failed"),
                 ),
-                mock.patch("micsync.cli.open_log_in_console", return_value=False) as open_log_in_console,
                 mock.patch("micsync.cli.send_notification") as send_notification,
             ):
                 result = run_import(
@@ -2553,7 +2574,6 @@ class CliRunTest(unittest.TestCase):
         self.assertEqual(len(anomaly_rows), 1)
         self.assertEqual(anomaly_rows[0]["code"], "derive_failed")
         self.assertEqual(anomaly_rows[0]["severity"], "fail")
-        open_log_in_console.assert_called_once()
         failure_notifications = [
             call.kwargs["message"]
             for call in send_notification.call_args_list

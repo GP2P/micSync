@@ -1,10 +1,17 @@
 # micSync
 
-`micSync` is an auto importer for DJI Mic internal recordings.
+micSync is an open-source utility for automatically importing, syncing, renaming, and organizing recordings from DJI Mic devices. It is designed around macOS with a nice Apple Shortcuts flow, but can also be used with other OS like Windows and Linux.
 
-It is designed for a simple workflow: plug in a DJI Mic receiver or transmitter, let a macOS Shortcut trigger the importer, and get verified local copies under your Downloads folder without manually browsing the device.
+It brings a simple workflow: plug in a DJI Mic transmitter or dock, let a macOS Shortcut trigger the importer, and get verified local copies under your Downloads folder, and ejects the devices after the file transfer completes. It is designed for people who record audio on DJI Mic transmitters and want a faster way to move recordings onto a Mac, keep files organized, and reduce manual file handling.
 
-## Scope
+> My workflow is: I usually keep my DJI Mic 3 charging case connected to my mac via USB (optional). When I need to use the mic, I just grab a mic because it has been unmounted by the script. When I return, I simply put the mic back to the charging case, macOS mounts the device, and Apple Shortcuts triggers micSync when the new drive is connected. micSync scans the drive and sends a notification about what it detected, then copies files in the background. Eventually the mic has been synced, and micSync sends another notification summarizing the work done. It disconnects the drives automatically and let them finish charging and ready for the next use.
+
+## What it does
+
+- Imports recordings from DJI Mic devices to your Mac
+- Syncs new files without duplicating old ones
+- Renames and organizes recordings into predictable folders
+- Helps automate a DJI Mic audio ingest workflow on macOS
 
 `micSync` focuses on DJI Mic style WAV files such as:
 
@@ -14,12 +21,13 @@ TX02_MIC001_20260608_112048_edit.wav
 TX00_MIC014_20260608_112048.wav
 ```
 
-It does four things:
+It does five things:
 
-- scans mounted devices for DJI recording files
-- mirrors new files into a durable local `raw/` store without modifying the device
+- scans mounted devices for DJI recording files (or you can spply it with where to look)
+- mirrors new files into a persistent local `raw/` store without modifying the device
 - records import metadata in SQLite
 - optionally creates an organized browsing copy tree
+- eject the mounted volume (your mic) so it can be unplugged anytime
 
 The recommended setup is macOS + Shortcuts. The core CLI can also run on Windows or Linux when you pass explicit source paths. Notifications, auto-eject, clipboard, and audio duration probing use macOS system tools when available.
 
